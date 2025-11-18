@@ -62,21 +62,67 @@ Spatial Query (Radius)
 
 🏃‍♂️ Getting Started
 
-Prerequisites
+## Prerequisites
 
-C++ Compiler (GCC/Clang)
+**C++ Dependencies:**
+- C++ Compiler (GCC/Clang with C++17 support)
+- CMake (3.10+)
+- libosmium2-dev
+- libprotozero-dev
+- libbz2-dev
+- libexpat1-dev
+- zlib1g-dev
 
-CMake
+**Python Dependencies (for visualization):**
+- python3
+- matplotlib
+- numpy
 
-Build
+## Installation
 
+```bash
+# Install dependencies (Ubuntu/Debian)
+sudo apt-get update
+sudo apt-get install -y libosmium2-dev libprotozero-dev libbz2-dev \
+    libexpat1-dev zlib1g-dev python3-matplotlib python3-numpy
+
+# Build the project
 mkdir build
 cd build
 cmake ..
 make
-./VeloGraph
+```
 
+## Usage
+
+```bash
+# Parse OSM data (PBF or XML format)
+./build/VeloGraph data/map.osm.pbf
+
+# Visualize the generated path
+python3 visualize_path.py sample_path.json output.png
+```
+
+## Features Implemented
+
+✅ **Efficient OSM PBF Parser**
+- Stream-based processing with libosmium
+- Filters highway tags for routing networks
+- Bidirectional and one-way road support
+- Sub-millisecond parsing for small datasets
+
+✅ **Graph Construction**
+- Adjacency list representation
+- Haversine distance calculation for edge weights
+- O(1) node lookups with unordered_map
+
+✅ **Path Visualization**
+- Python script with matplotlib
+- Annotated paths with start/end markers
+- Export to PNG format
+
+See [OSM_PARSER_README.md](OSM_PARSER_README.md) for detailed documentation.
 
 🗺 Data
 
-To test the engine, download an .osm extract from Geofabrik. Place it in the /data folder.
+To test the engine, download an .osm.pbf extract from [Geofabrik](https://download.geofabrik.de/). Place it in the `/data` folder.
