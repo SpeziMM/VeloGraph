@@ -1,1 +1,0 @@
-/home/runner/work/VeloGraph/.codeql-scratch/dbs/cpp/working/autobuild/bin/c++ -O3 -DNDEBUG -Wl,--dependency-file=CMakeFiles/VeloGraph.dir/link.d CMakeFiles/VeloGraph.dir/src/Graph.cpp.o CMakeFiles/VeloGraph.dir/src/OSMParser.cpp.o CMakeFiles/VeloGraph.dir/src/main.cpp.o -o VeloGraph  -lz -lbz2 -lexpat
