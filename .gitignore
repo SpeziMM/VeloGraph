@@ -1,0 +1,15 @@
+build/
+.vscode/
+.DS_Store
+*.o
+*.exe
+data/*.osm
+data/*.pbf
+EOTcat <<EOT >> .gitignore
+build/
+.vscode/
+.DS_Store
+*.o
+*.exe
+data/*.osm
+data/*.pbf
