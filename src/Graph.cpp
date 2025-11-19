@@ -38,12 +38,27 @@ size_t Graph::edgeCount() const {
 
 // Haversine formula to calculate distance between two lat/lon points
 double Graph::calculateDistance(const Node& from, const Node& to) const {
-    const double R = 6371000.0; // Earth radius in meters
-    
-    double lat1_rad = from.lat * M_PI / 180.0;
-    double lat2_rad = to.lat * M_PI / 180.0;
-    double delta_lat = (to.lat - from.lat) * M_PI / 180.0;
-    double delta_lon = (to.lon - from.lon) * M_PI / 180.0;
+    constexpr double R = 6371000.0; // Earth radius in meters
+    constexpr double DEG_TO_RAD = M_PI / 180.0;
+
+    // Optimization: Use Equirectangular approximation for short distances (< ~11km)
+    // This avoids expensive trigonometric calculations for the vast majority of edges
+    if (std::abs(from.lat - to.lat) < 0.1 && std::abs(from.lon - to.lon) < 0.1) {
+        const double avg_lat_rad = (from.lat + to.lat) * 0.5 * DEG_TO_RAD;
+        const double delta_lat = (to.lat - from.lat) * DEG_TO_RAD;
+        const double delta_lon = (to.lon - from.lon) * DEG_TO_RAD;
+        
+        const double x = delta_lon * std::cos(avg_lat_rad);
+        const double y = delta_lat;
+        
+        return R * std::sqrt(x * x + y * y);
+    }
+
+    // Fallback to Haversine for longer distances
+    double lat1_rad = from.lat * DEG_TO_RAD;
+    double lat2_rad = to.lat * DEG_TO_RAD;
+    double delta_lat = (to.lat - from.lat) * DEG_TO_RAD;
+    double delta_lon = (to.lon - from.lon) * DEG_TO_RAD;
     
     double a = std::sin(delta_lat / 2.0) * std::sin(delta_lat / 2.0) +
                std::cos(lat1_rad) * std::cos(lat2_rad) *
