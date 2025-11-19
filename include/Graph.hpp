@@ -26,12 +26,24 @@ private:
     std::unordered_map<long, Node> nodes;
     std::unordered_map<long, std::vector<Edge>> adjacency_list;
     
+    // Spatial Index (K-D Tree)
+    std::vector<long> spatial_index; // Stores node IDs
+    bool index_built = false;
+
+    void buildKDTree(size_t start, size_t end, int depth);
+    void findNearestNeighbor(size_t start, size_t end, int depth, double lat, double lon, long& best_node, double& min_dist) const;
+
     // Calculate Haversine distance between two nodes (in meters)
     double calculateDistance(const Node& from, const Node& to) const;
+    double calculateDistance(double lat1, double lon1, double lat2, double lon2) const;
 
 public:
     void addNode(const Node& n);
     void addEdge(long from_id, long to_id);
+    
+    // Spatial queries
+    void buildSpatialIndex();
+    const Node* findClosestNode(double lat, double lon) const;
     
     // Getters
     const std::unordered_map<long, Node>& getNodes() const { return nodes; }
