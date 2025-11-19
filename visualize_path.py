@@ -1,19 +1,105 @@
 #!/usr/bin/env python3
 """
 VeloGraph Path Visualizer
-Visualizes paths on parsed OSM graphs using matplotlib
+Visualizes paths on parsed OSM graphs using matplotlib with map backgrounds
 """
 
 import json
 import sys
-import matplotlib.pyplot as plt
-import numpy as np
+import webbrowser
+import os
+
+try:
+    import folium
+    HAS_FOLIUM = True
+except ImportError:
+    HAS_FOLIUM = False
 
 def load_path(filename):
     """Load path data from JSON file"""
     with open(filename, 'r') as f:
         data = json.load(f)
     return data['nodes']
+
+def create_interactive_map(nodes, output_file='path_map.html'):
+    """Create an interactive HTML map using folium"""
+    if not HAS_FOLIUM:
+        print("Warning: folium not installed.")
+        print("Install with: pip3 install folium")
+        return
+    
+    if not nodes:
+        print("Error: No nodes to visualize")
+        return
+    
+    # Extract coordinates
+    lats = [node['lat'] for node in nodes]
+    lons = [node['lon'] for node in nodes]
+    
+    # Calculate center point
+    center_lat = (min(lats) + max(lats)) / 2
+    center_lon = (min(lons) + max(lons)) / 2
+    
+    # Create map
+    m = folium.Map(location=[center_lat, center_lon], zoom_start=14, 
+                   tiles='OpenStreetMap', control_scale=True)
+    
+    # Add path as a polyline
+    path_coords = [[node['lat'], node['lon']] for node in nodes]
+    folium.PolyLine(path_coords, color='blue', weight=4, opacity=0.8, 
+                    popup=f'Path with {len(nodes)} nodes').add_to(m)
+    
+    # Add start marker
+    folium.Marker(
+        [lats[0], lons[0]],
+        popup=f'Start (Node {nodes[0]["id"]})',
+        icon=folium.Icon(color='green', icon='play', prefix='fa'),
+        tooltip='Start Point'
+    ).add_to(m)
+    
+    # Add end marker
+    folium.Marker(
+        [lats[-1], lons[-1]],
+        popup=f'End (Node {nodes[-1]["id"]})',
+        icon=folium.Icon(color='red', icon='stop', prefix='fa'),
+        tooltip='End Point'
+    ).add_to(m)
+    
+    # Add intermediate nodes as circle markers
+    for i, node in enumerate(nodes[1:-1], 1):
+        folium.CircleMarker(
+            [node['lat'], node['lon']],
+            radius=3,
+            color='blue',
+            fill=True,
+            fillColor='blue',
+            fillOpacity=0.6,
+            popup=f'Node {node["id"]} (#{i})',
+            tooltip=f'Node #{i}'
+        ).add_to(m)
+    
+    # Add statistics
+    stats_html = f"""
+    <div style="position: fixed; 
+                top: 10px; right: 10px; width: 200px; height: auto; 
+                background-color: white; border:2px solid grey; z-index:9999; 
+                font-size:14px; padding: 10px">
+    <h4 style="margin-top:0">Path Statistics</h4>
+    <b>Nodes:</b> {len(nodes)}<br>
+    <b>Lat range:</b> {min(lats):.4f} - {max(lats):.4f}<br>
+    <b>Lon range:</b> {min(lons):.4f} - {max(lons):.4f}
+    </div>
+    """
+    m.get_root().html.add_child(folium.Element(stats_html))
+    
+    # Save map
+    m.save(output_file)
+    print(f"Interactive map saved to {output_file}")
+    
+    # Open in browser automatically
+    abs_path = os.path.abspath(output_file)
+    print(f"Opening map in browser...")
+    webbrowser.open(f'file://{abs_path}')
 
 def visualize_path(nodes, output_file=None):
     """Visualize a path on a map using matplotlib"""
@@ -65,23 +151,32 @@ def visualize_path(nodes, output_file=None):
 
 def main():
     if len(sys.argv) < 2:
-        print("Usage: python3 visualize_path.py <path.json> [output.png]")
-        print("Example: python3 visualize_path.py sample_path.json")
-        print("         python3 visualize_path.py sample_path.json output.png")
+        print("Usage: python3 visualize_path.py <path.json> [output.html]")
+        print("\nExamples:")
+        print("  python3 visualize_path.py sample_path.json")
+        print("  python3 visualize_path.py sample_path.json my_route.html")
+        print("\nInstall required library:")
+        print("  pip3 install folium")
+        sys.exit(1)
+    
+    if not HAS_FOLIUM:
+        print("Error: folium is not installed.")
+        print("Install with: pip3 install folium")
         sys.exit(1)
     
     input_file = sys.argv[1]
-    output_file = sys.argv[2] if len(sys.argv) > 2 else None
+    output_file = sys.argv[2] if len(sys.argv) > 2 else 'path_map.html'
+    
+    # Ensure output file has .html extension
+    if not output_file.endswith('.html'):
+        output_file += '.html'
     
     print(f"Loading path from {input_file}...")
     nodes = load_path(input_file)
-    print(f"Loaded {len(nodes)} nodes")
+    print(f"Loaded {len(nodes)} nodes\n")
     
-    print("Generating visualization...")
-    visualize_path(nodes, output_file)
-    
-    if not output_file:
-        print("Displaying visualization (close window to exit)")
+    print("Generating interactive map...")
+    create_interactive_map(nodes, output_file)
 
 if __name__ == '__main__':
     main()

@@ -25,13 +25,22 @@ This implementation provides an efficient OpenStreetMap (OSM) PBF parser using l
 - python3
 - matplotlib
 - numpy
+- contextily (optional, for map backgrounds)
+- folium (optional, for interactive maps)
 
 ## Installation
 
-### Install Dependencies (Ubuntu/Debian)
+### Install Dependencies (macOS)
 ```bash
-sudo apt-get update
-sudo apt-get install -y libosmium2-dev libprotozero-dev libbz2-dev libexpat1-dev zlib1g-dev python3-matplotlib python3-numpy
+brew update
+brew install osmium-tool protozero libbz2 expat zlib
+
+# Python dependencies (basic)
+pip3 install matplotlib numpy folium
+
+# Optional: For map backgrounds with contextily (requires GDAL)
+brew install gdal
+pip3 install contextily
 ```
 
 ### Build the Project
@@ -64,13 +73,30 @@ The parser will:
 
 ### 2. Visualize the Path
 
+The visualizer now supports three modes:
+
 ```bash
-# Display visualization
+# Basic plot (no external map data)
 python3 visualize_path.py sample_path.json
 
-# Save to file
-python3 visualize_path.py sample_path.json output.png
+# With OpenStreetMap background (requires contextily)
+python3 visualize_path.py sample_path.json --mode map
+
+# Interactive HTML map (requires folium)
+python3 visualize_path.py sample_path.json --mode interactive
+
+# Generate all available formats
+python3 visualize_path.py sample_path.json --mode all
+
+# Save to specific file
+python3 visualize_path.py sample_path.json output.png --mode map
 ```
+
+**Visualization Modes:**
+- `basic` - Simple matplotlib plot with coordinates
+- `map` - Matplotlib with OpenStreetMap tile background (requires `contextily`)
+- `interactive` - Interactive HTML map with zoom/pan (requires `folium`)
+- `all` - Generate all available visualizations
 
 ## Example Output
 
