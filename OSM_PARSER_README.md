@@ -10,6 +10,7 @@ This implementation provides an efficient OpenStreetMap (OSM) PBF parser using l
 - **Graph Construction**: Builds an optimized adjacency list representation with Haversine distance calculation
 - **Path Visualization**: Python script to visualize paths on parsed graphs using matplotlib
 - **Performance**: Targets sub-second parsing for city-scale maps
+- **Graph Cache**: Stores the built (and optionally simplified) graph for fast reuse
 
 ## Dependencies
 
@@ -70,6 +71,10 @@ The parser will:
 - Build a graph with nodes and edges
 - Calculate distances using Haversine formula
 - Export a sample path to `sample_path.json`
+
+Caching:
+- The graph is cached under `output/graph_cache_<pbf_name>_{simp|raw}.bin`.
+- The cache is invalidated when the PBF size or modification time changes.
 
 ### 2. Visualize the Path
 
@@ -169,6 +174,7 @@ The parser is optimized for:
 - **Fast parsing**: Sub-second for city-scale maps
 - **Efficient graph construction**: Linear time complexity O(N)
 - **Cache-friendly**: Adjacency list structure
+- **Cache reuse**: Subsequent runs can skip parsing/building when the cache is valid
 
 ## Testing
 
