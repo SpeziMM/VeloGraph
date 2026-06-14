@@ -51,7 +51,7 @@ OSMParser (libosmium)  →  Graph (adjacency list + KD-tree)  →  RouteFinder  
 | `include/RouteEvaluator.hpp`, `src/RouteEvaluator.cpp` | Weighted fitness scoring: safety (lit), scenery (low-traffic), surface quality, traffic penalty. User profiles. |
 | `src/main.cpp` | CLI entry point, argument parsing, JSON export. |
 | `visualize_path.py` | Python matplotlib path visualizer. |
-| `tools/` | Standalone utilities: `parse_only.cpp`, `inspect_graph.cpp`, `get_first_node.cpp`. |
+| `tools/` | Standalone utilities: `parse_only.cpp`, `inspect_graph.cpp`, `get_first_node.cpp`. Also `compress_context.py` — LLMLingua-2 context compressor for trimming large docs/logs before adding them to context (see below). |
 
 ## Algorithm overview (RouteFinder)
 
@@ -65,6 +65,16 @@ OSMParser (libosmium)  →  Graph (adjacency list + KD-tree)  →  RouteFinder  
 - OSM PBF files go in `data/` (gitignored). Download from [Geofabrik](https://download.geofabrik.de/).
 - Graph caches are written to `output/graph_cache_*.bin` and auto-invalidated when the PBF changes.
 - Route output is JSON with node coordinates + fitness breakdown.
+
+## Context compression (token savings)
+
+`tools/compress_context.py` uses LLMLingua-2 to shrink large reference text before it enters context. Use it for verbose, low-signal text (READMEs, error dumps, JSON output) — **not** for source you'll edit or exact configs (it's lossy).
+
+```bash
+pip3 install llmlingua                                          # one-time
+python3 tools/compress_context.py --file <path> --rate 0.5     # 0.3 aggressive / 0.5 balanced / 0.7 light
+cat long_output.txt | python3 tools/compress_context.py --rate 0.3
+```
 
 ## Dependencies
 

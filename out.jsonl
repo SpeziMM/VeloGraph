@@ -1,0 +1,2 @@
+{"ts":"2026-06-13T11:58:58Z","cpu":"Apple M5 Pro","cores":15,"mem_gb":48,"os":"Darwin 25.5.0 arm64","git":"e1d75a9","pbf_md5":"4dd07b11d828","cold_s":7.0531,"cached_s":1.9550,"per_iter_ms":0.1251}
+{"ts":"2026-06-14T11:36:46Z","cpu":"Apple M5 Pro","cores":15,"mem_gb":48,"os":"Darwin 25.5.0 arm64","git":"e1d75a9","pbf_md5":"4dd07b11d828","cold_s":6.9908,"cached_s":1.8555,"per_iter_ms":0.1479}
