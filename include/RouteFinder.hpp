@@ -19,7 +19,8 @@ public:
         RouteEvaluator::RouteScore detailed_score;
     };
 
-    RouteFinder(const Graph& graph, const RouteEvaluator& evaluator);
+    // seed: 0 = nondeterministic (random_device); nonzero = reproducible runs
+    RouteFinder(const Graph& graph, const RouteEvaluator& evaluator, unsigned int seed = 0);
 
     // Main entry point: find best cycle within tolerance of target distance
     RouteResult findOptimalCycle(long start_node,

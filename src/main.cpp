@@ -54,6 +54,7 @@ void printUsage(const char* prog_name) {
     std::cerr << "  --profile <name>        User profile: scenic, safe-night, mountain-bike, casual" << std::endl;
     std::cerr << "  --iterations <n>        Search iterations (default: 100)" << std::endl;
     std::cerr << "  --tolerance <fraction>  Distance tolerance fraction (default: 0.1)" << std::endl;
+    std::cerr << "  --seed <n>              RNG seed for reproducible routes (default: 0 = random)" << std::endl;
     std::cerr << "\nCustom weights (override profile, values 0.0-1.0):" << std::endl;
     std::cerr << "  --safety <weight>       Weight for lit streets (default: from profile)" << std::endl;
     std::cerr << "  --scenery <weight>      Weight for scenic/low-traffic (default: from profile)" << std::endl;
@@ -85,6 +86,7 @@ int main(int argc, char* argv[]) {
     int iterations = 10;
     bool simplify = true;
     double custom_turn_weight = -1.0;
+    unsigned int seed = 0;  // 0 = nondeterministic; nonzero = reproducible
 
     for (int i = 1; i < argc; ++i) {
         std::string arg = argv[i];
@@ -106,6 +108,8 @@ int main(int argc, char* argv[]) {
             iterations = std::max(1, std::stoi(argv[++i]));
         } else if (arg == "--weight_turns" && i + 1 < argc) {
             custom_turn_weight = std::stod(argv[++i]);
+        } else if (arg == "--seed" && i + 1 < argc) {
+            seed = static_cast<unsigned int>(std::stoul(argv[++i]));
         } else if (arg == "--no_simplify") {
             simplify = false;
         }
@@ -164,7 +168,7 @@ int main(int argc, char* argv[]) {
                   << " at " << start_node->lat << ", " << start_node->lon << std::endl;
         
         // Find optimal cycle route
-        RouteFinder finder(graph, evaluator);
+        RouteFinder finder(graph, evaluator, seed);
         auto result = finder.findOptimalCycle(start_node->id, target_distance, 0.1, profile, iterations);
         
         if (!result.path.empty()) {

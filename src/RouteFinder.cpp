@@ -10,8 +10,8 @@
 #include <iostream>
 #include <cmath>
 
-RouteFinder::RouteFinder(const Graph& graph, const RouteEvaluator& evaluator)
-    : graph(graph), evaluator(evaluator), rng(std::random_device{}()) {
+RouteFinder::RouteFinder(const Graph& graph, const RouteEvaluator& evaluator, unsigned int seed)
+    : graph(graph), evaluator(evaluator), rng(seed ? seed : std::random_device{}()) {
 }
 
 RouteFinder::RouteResult RouteFinder::findOptimalCycle(long start_node,
