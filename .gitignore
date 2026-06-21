@@ -10,6 +10,8 @@ _codeql_detected_source_root
 *.png
 data/*.osm
 data/*.pbf
+data/dem/
+data/*.tif
 
 # Generated output (route JSON, maps, graph cache, benchmark logs)
 output/

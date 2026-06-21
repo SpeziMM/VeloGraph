@@ -158,9 +158,30 @@ sampling lives in Python).
 - **Effective:** `weight_gradient 0.6` cut single-route ascent **237 m → 138 m**. Aggregate over
   the curated 21-node set: see `runs/elev_off.csv` vs `runs/elev_on.csv`.
 
+**Real DEM workflow (Copernicus GLO-30, no account/API key):**
+```bash
+./build/inspect_graph output/graph_cache_<pbf>_simp.bin --dump-nodes > nodes.txt
+python3 tools/fetch_dem.py    --nodes nodes.txt --out-dir data/dem          # 1deg tiles from AWS S3
+python3 tools/build_elevation.py --nodes nodes.txt --dem-dir data/dem --out output/elevation_real.bin
+./build/VeloGraph <pbf> --start_node <id> --elevation output/elevation_real.bin --weight_gradient 0.4
+```
+- `tools/fetch_dem.py` downloads every 1°×1° tile covering a bbox (or a node dump) from the
+  public `copernicus-dem-30m` S3 bucket. `build_elevation.py --dem-dir` samples across tiles,
+  grouping nodes by 1° cell. DEM tiles are gitignored (`data/dem/`, ~250 MB for the regbez).
+
+**How verified (real data):** Karlsruhe regbez, all 1.05M nodes sampled at 100% coverage,
+elevations 83 m (Rhine valley) → 1159 m (N. Black Forest), matching geography; a direct rasterio
+sample of a node equalled its sidecar value. Routing from a **hilly** Black Forest node
+(281756094 @ 705 m, 5 km, seed 777): `weight_gradient 0.4` cut ascent **65 m → 24 m (−64%)** at
+similar distance. Over the curated 21-node set (mostly flat Rhine-plain start points) the effect
+is ~neutral (mean ascent 68 → 73 m) — there's nothing to avoid on flat ground. So the knob helps
+exactly where it should and is roughly a no-op elsewhere; total ascent isn't the penalty's direct
+objective (it penalizes per-edge |grade|), but the two correlate strongly in real hilly terrain.
+CSVs: `runs/real_off.csv` vs `runs/real_on.csv`.
+
 **Notes / gotchas**
-- No real DEM ships in the repo; `--synthetic` exists to test the pipeline. For real routing,
-  point `build_elevation.py --dem` at an SRTM/Copernicus tile covering the area.
+- Copernicus COGs carry a half-pixel border (bounds.bottom ≈ 48.9999), so tile lookup rounds to
+  the integer SW corner — flooring drops ~all matches. (Fixed in `build_elevation.py`.)
 - Penalty is symmetric (|grade|), i.e. "avoid hilly terrain". A "seek hills" training mode would
   need a signed/negative-weight variant — future work.
 

@@ -26,6 +26,7 @@ then count * (int64 node_id, float32 elevation_m).
 """
 import argparse
 import math
+import os
 import struct
 import sys
 
@@ -57,19 +58,40 @@ def synthetic_elevation(lat, lon):
     return max(0.0, base + macro + hills)
 
 
-def sample_dem(nodes, dem_path):
+def sample_dem(nodes, dem_paths):
+    """Sample node elevations from one or more DEM tiles (assumed EPSG:4326 lon/lat).
+
+    Nodes are grouped by 1deg tile so each raster is sampled in a single batch; nodes
+    with no covering tile get 0.0.
+    """
     try:
         import rasterio
     except ImportError:
         sys.exit("rasterio not installed. `pip install rasterio`, or use --synthetic.")
-    import rasterio
-    with rasterio.open(dem_path) as ds:
-        band = 1
+    from collections import defaultdict
+
+    ds_by_key = {}
+    for p in dem_paths:
+        ds = rasterio.open(p)
+        b = ds.bounds
+        # Copernicus COGs carry a half-pixel border (bottom ~= 48.9999), so round to the
+        # integer SW corner rather than floor.
+        key = (round(b.bottom), round(b.left))
+        ds_by_key[key] = ds
+
+    groups = defaultdict(list)
+    for (nid, lat, lon) in nodes:
+        groups[(math.floor(lat), math.floor(lon))].append((nid, lat, lon))
+
+    for key, grp in groups.items():
+        ds = ds_by_key.get(key)
+        if ds is None:
+            for (nid, _lat, _lon) in grp:
+                yield nid, 0.0
+            continue
         nodata = ds.nodata
-        # rasterio.sample wants (lon, lat) == (x, y) and returns an iterator of arrays.
-        coords = [(lon, lat) for (_id, lat, lon) in nodes]
-        ids = [nid for (nid, _lat, _lon) in nodes]
-        for nid, val in zip(ids, ds.sample(coords, indexes=band)):
+        coords = [(lon, lat) for (_nid, lat, lon) in grp]
+        for (nid, _lat, _lon), val in zip(grp, ds.sample(coords, indexes=1)):
             e = float(val[0])
             if nodata is not None and e == nodata:
                 e = 0.0
@@ -89,14 +111,19 @@ def write_sidecar(pairs, out_path):
 def main():
     ap = argparse.ArgumentParser(description="Build a VeloGraph elevation sidecar")
     ap.add_argument("--nodes", required=True, help="'id lat lon' dump, or '-' for stdin")
-    ap.add_argument("--dem", help="DEM raster (GeoTIFF/.hgt) sampled via rasterio")
+    ap.add_argument("--dem", nargs="+", help="DEM raster tile(s) (GeoTIFF/.hgt) sampled via rasterio")
+    ap.add_argument("--dem-dir", help="directory of DEM tiles (*.tif) to sample, e.g. data/dem")
     ap.add_argument("--synthetic", action="store_true",
                     help="generate a deterministic test terrain instead of sampling a DEM")
     ap.add_argument("--out", required=True, help="output sidecar path")
     args = ap.parse_args()
 
-    if not args.dem and not args.synthetic:
-        sys.exit("Provide --dem <raster> or --synthetic.")
+    dem_paths = list(args.dem) if args.dem else []
+    if args.dem_dir:
+        import glob
+        dem_paths += sorted(glob.glob(os.path.join(args.dem_dir, "*.tif")))
+    if not dem_paths and not args.synthetic:
+        sys.exit("Provide --dem <tiles>, --dem-dir <dir>, or --synthetic.")
 
     nodes = list(read_nodes(args.nodes))
     if not nodes:
@@ -105,11 +132,12 @@ def main():
     if args.synthetic:
         pairs = ((nid, synthetic_elevation(lat, lon)) for (nid, lat, lon) in nodes)
     else:
-        pairs = sample_dem(nodes, args.dem)
+        print(f"Sampling {len(nodes)} nodes from {len(dem_paths)} DEM tile(s)...")
+        pairs = sample_dem(nodes, dem_paths)
 
     n = write_sidecar(pairs, args.out)
-    print(f"Wrote {n} node elevations to {args.out} "
-          f"({'synthetic' if args.synthetic else args.dem})")
+    src = "synthetic" if args.synthetic else f"{len(dem_paths)} DEM tile(s)"
+    print(f"Wrote {n} node elevations to {args.out} ({src})")
 
 
 if __name__ == "__main__":
