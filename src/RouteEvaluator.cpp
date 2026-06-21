@@ -1,5 +1,6 @@
 #include "RouteEvaluator.hpp"
 #include <algorithm>
+#include <cmath>
 
 // Predefined profiles
 RouteEvaluator::UserProfile RouteEvaluator::getProfileScenic() {
@@ -119,11 +120,16 @@ double RouteEvaluator::evaluateEdge(const Graph::Edge& edge,
         effective_safety_weight *= 2.0;  // Double penalty for unlit at night
     }
 
+    // Steepness penalty: |slope| normalized so a 10% grade hits the cap. Symmetric (up or
+    // down both count as "hilly"); weight_gradient == 0 leaves fitness unchanged.
+    double gradient_penalty = std::min(1.0, std::abs(static_cast<double>(edge.grade)) / 0.10);
+
     // Compute weighted fitness (higher is better)
     double fitness = effective_safety_weight * safety_score
                    + profile.weight_scenery * scenery_score
                    + profile.weight_quality * quality_score
-                   - profile.weight_traffic * traffic_penalty;
+                   - profile.weight_traffic * traffic_penalty
+                   - profile.weight_gradient * gradient_penalty;
 
     // Clamp to [0, 1]
     return std::max(0.0, std::min(1.0, fitness));
@@ -134,7 +140,7 @@ RouteEvaluator::RouteScore RouteEvaluator::evaluateRoute(
         const std::vector<long>& path,
         const UserProfile& profile) const {
 
-    RouteScore result = {0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0};
+    RouteScore result{};
 
     if (path.size() < 2) return result;
 
@@ -142,6 +148,7 @@ RouteEvaluator::RouteScore RouteEvaluator::evaluateRoute(
     double total_scenery_weighted = 0.0;
     double total_quality_weighted = 0.0;
     double total_traffic_weighted = 0.0;
+    double total_gradient_weighted = 0.0;
 
     for (size_t i = 0; i < path.size() - 1; ++i) {
         const auto* edges = graph.getEdges(path[i]);
@@ -156,6 +163,18 @@ RouteEvaluator::RouteScore RouteEvaluator::evaluateRoute(
                 total_scenery_weighted += getSceneryScore(edge.highway_class) * dist;
                 total_quality_weighted += getSurfaceScore(edge.surface) * dist;
                 total_traffic_weighted += getTrafficPenalty(edge.highway_class) * dist;
+
+                // Elevation: total positive ascent + distance-weighted |slope| penalty.
+                const auto* from_n = graph.getNode(path[i]);
+                const auto* to_n = graph.getNode(path[i + 1]);
+                if (from_n && to_n) {
+                    double delta = static_cast<double>(to_n->elevation) - from_n->elevation;
+                    if (delta > 0.0) result.total_ascent_m += delta;
+                    if (dist > 0.0) {
+                        double grade_pen = std::min(1.0, std::abs(delta) / dist / 0.10);
+                        total_gradient_weighted += grade_pen * dist;
+                    }
+                }
                 break;
             }
         }
@@ -177,6 +196,7 @@ RouteEvaluator::RouteScore RouteEvaluator::evaluateRoute(
         result.scenery_score = total_scenery_weighted / result.total_distance;
         result.quality_score = total_quality_weighted / result.total_distance;
         result.traffic_penalty = total_traffic_weighted / result.total_distance;
+        result.gradient_penalty = total_gradient_weighted / result.total_distance;
 
         double turns_per_km = sharp_turns / (result.total_distance / 1000.0);
         result.turn_penalty = std::min(1.0, turns_per_km / 10.0);
@@ -190,7 +210,8 @@ RouteEvaluator::RouteScore RouteEvaluator::evaluateRoute(
                              + profile.weight_scenery * result.scenery_score
                              + profile.weight_quality * result.quality_score
                              - profile.weight_traffic * result.traffic_penalty
-                             - profile.weight_turns * result.turn_penalty;
+                             - profile.weight_turns * result.turn_penalty
+                             - profile.weight_gradient * result.gradient_penalty;
 
         result.total_fitness = std::max(0.0, std::min(1.0, result.total_fitness));
     }

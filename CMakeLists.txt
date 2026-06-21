@@ -4,6 +4,8 @@ project(VeloGraph)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED True)
 
+option(BUILD_TOOLS "Build standalone tools in tools/ (parse_only, inspect_graph, ...)" ON)
+
 # Include directories
 include_directories(include)
 
@@ -21,19 +23,31 @@ find_package(ZLIB REQUIRED)
 find_package(BZip2 REQUIRED)
 find_package(EXPAT REQUIRED)
 
-# Source files
-file(GLOB SOURCES "src/*.cpp")
+# Shared engine sources (everything in src/ except the CLI entry point) compiled
+# once into an object library, reused by the main binary and every tool.
+file(GLOB CORE_SOURCES "src/*.cpp")
+list(REMOVE_ITEM CORE_SOURCES "${CMAKE_CURRENT_SOURCE_DIR}/src/main.cpp")
 
-# Executable
-add_executable(VeloGraph ${SOURCES})
+add_library(velograph_core OBJECT ${CORE_SOURCES})
+target_compile_options(velograph_core PRIVATE -O3 -march=native)
 
-# Link libraries for OSM PBF parsing
-target_link_libraries(VeloGraph 
+set(VELOGRAPH_LIBS
     Threads::Threads
     ${ZLIB_LIBRARIES}
     ${BZIP2_LIBRARIES}
     ${EXPAT_LIBRARIES}
 )
 
-# Compiler flags for optimization
+# Main executable
+add_executable(VeloGraph src/main.cpp $<TARGET_OBJECTS:velograph_core>)
 target_compile_options(VeloGraph PRIVATE -O3 -march=native)
+target_link_libraries(VeloGraph ${VELOGRAPH_LIBS})
+
+# Standalone tools — each links the shared core objects so src/ isn't recompiled per tool.
+if(BUILD_TOOLS)
+    foreach(tool parse_only parse_build_only inspect_graph get_first_node)
+        add_executable(${tool} tools/${tool}.cpp $<TARGET_OBJECTS:velograph_core>)
+        target_compile_options(${tool} PRIVATE -O3 -march=native)
+        target_link_libraries(${tool} ${VELOGRAPH_LIBS})
+    endforeach()
+endif()

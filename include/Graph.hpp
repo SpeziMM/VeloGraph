@@ -42,7 +42,8 @@ public:
         double lat;
         double lon;
         // Optimization: Use bit-packing for flags (traffic, surface type)
-        unsigned char flags; 
+        unsigned char flags;
+        float elevation = 0.0f;     // Meters; runtime overlay from loadElevation (not serialized)
     };
 
     struct Edge {
@@ -52,6 +53,7 @@ public:
         SurfaceQuality surface;     // Surface quality
         bool is_lit;                // Street lighting
         bool is_oneway;             // One-way restriction
+        float grade = 0.0f;         // Signed slope = (elev_to - elev_from)/weight; set by loadElevation
     };
 
     struct EdgeInput {
@@ -107,6 +109,11 @@ public:
     bool serialize(std::ostream& out) const;
     bool deserialize(std::istream& in);
     void rebuildIncomingFromAdjacency();
+
+    // Load per-node elevation from a sidecar produced by tools/build_elevation.py and
+    // compute each edge's signed grade. Runtime overlay — not part of the graph cache.
+    // Returns the number of nodes matched, or -1 on read error.
+    long loadElevation(const std::string& path);
 
     size_t nodeCount() const { return nodes.size(); }
     size_t edgeCount() const;

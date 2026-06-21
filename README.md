@@ -99,8 +99,8 @@ make
 # Parse OSM data (PBF or XML format)
 ./build/VeloGraph data/map.osm.pbf
 
-# Visualize the generated path
-python3 visualize_path.py sample_path.json output.png
+# Visualize the generated path (Leaflet + OSM tiles)
+python3 tools/route_map.py output/sample_path.json output/route_map.html
 ```
 
 ## Features Implemented

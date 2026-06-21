@@ -16,8 +16,8 @@ cd build && cmake .. && make -j$(sysctl -n hw.ncpu)
   --profile scenic \
   --iterations 10
 
-# Visualize output
-python3 visualize_path.py output/sample_path.json output.png
+# Visualize output (Leaflet + OSM tiles)
+python3 tools/route_map.py output/sample_path.json output/route_map.html
 ```
 
 ### CLI flags
@@ -27,11 +27,21 @@ python3 visualize_path.py output/sample_path.json output.png
 | `--target_distance <m>` | Target loop distance in meters | 5000 |
 | `--profile <name>` | `scenic`, `safe-night`, `mountain-bike`, `casual` | scenic |
 | `--iterations <n>` | Number of search iterations | 10 |
+| `--seed <n>` | RNG seed; 0 = random, nonzero = reproducible | 0 |
+| `--threads <n>` | Worker threads for the parallel search; 0 = auto | 0 |
+| `--elevation <file>` | Elevation sidecar (see `tools/build_elevation.py`) for hill-aware routing | — |
+| `--weight_gradient <w>` | Steep-slope penalty [0–1]; 0 = ignore elevation | profile (0) |
 | `--no_simplify` | Skip graph simplification | off |
 | `--output_path <file>` | JSON output path | `output/sample_path.json` |
 
+The search is **parallel and deterministic**: a given `--seed` yields the same route regardless of `--threads` (each iteration uses an RNG seeded from `(seed, iteration_index)`).
+
 ### Getting a start node ID
-Use the `inspect_graph` or `get_first_node` tools in `tools/` to find valid node IDs from a parsed graph, or use `findClosestNode()` in the Graph API with lat/lon coordinates.
+Use `./build/inspect_graph <cache.bin> --sample N` for sampled well-connected nodes, `get_first_node`, or `findClosestNode()` in the Graph API with lat/lon coordinates.
+
+### Eval harness & elevation
+- `tools/eval_quality.py` — runs the engine over many start nodes at a fixed seed and aggregates fail-rate / distance-error / fitness / wall-time / ascent; `--baseline A --compare B` diffs two CSVs.
+- `tools/build_elevation.py` — samples a DEM (rasterio) or a `--synthetic` terrain into an elevation sidecar; feed node coords via `inspect_graph --dump-nodes`.
 
 ## Architecture
 
@@ -46,12 +56,14 @@ OSMParser (libosmium)  →  Graph (adjacency list + KD-tree)  →  RouteFinder  
 | File | Purpose |
 |------|---------|
 | `include/OSMParser.hpp`, `src/OSMParser.cpp` | Parses .osm.pbf via libosmium, extracts highway/surface/lit tags, builds edges. Caches parsed graphs to `output/graph_cache_*.bin`. |
-| `include/Graph.hpp`, `src/Graph.cpp` | Adjacency list graph with KD-tree spatial index, Haversine distance, graph simplification (merge degree-2 nodes), binary serialization. |
-| `include/RouteFinder.hpp`, `src/RouteFinder.cpp` | The cycle-finding algorithm: Phase 1 outbound walk + Phase 2 A* return + 2-opt optimization. |
-| `include/RouteEvaluator.hpp`, `src/RouteEvaluator.cpp` | Weighted fitness scoring: safety (lit), scenery (low-traffic), surface quality, traffic penalty. User profiles. |
-| `src/main.cpp` | CLI entry point, argument parsing, JSON export. |
-| `visualize_path.py` | Python matplotlib path visualizer. |
-| `tools/` | Standalone utilities: `parse_only.cpp`, `inspect_graph.cpp`, `get_first_node.cpp`. |
+| `include/Graph.hpp`, `src/Graph.cpp` | Adjacency list graph with KD-tree spatial index, Haversine distance, graph simplification (merge degree-2 nodes), binary serialization. `loadElevation()` applies a runtime elevation overlay (node elevation + edge grade). |
+| `include/RouteFinder.hpp`, `src/RouteFinder.cpp` | Hybrid waypoint cycle-finder. Runs independent iterations in **parallel** (work-stealing pool; per-iteration RNG `seed_seq{base_seed, i}` ⇒ deterministic regardless of thread count) and reduces to the best. |
+| `include/RouteEvaluator.hpp`, `src/RouteEvaluator.cpp` | Weighted fitness scoring: safety (lit), scenery (low-traffic), surface quality, traffic, turns, and **gradient** (`weight_gradient`, default 0). Reports total ascent. User profiles. |
+| `src/main.cpp` | CLI entry point, argument parsing, timed run, JSON export (route + `run` metadata + score breakdown). |
+| `tools/route_map.py` | Leaflet + OSM-tile route visualizer (reads route JSON). |
+| `tools/eval_quality.py` | Route-quality eval harness (fail-rate / distance-error / fitness / wall-time / ascent; baseline-vs-compare). |
+| `tools/build_elevation.py` | Builds an elevation sidecar from a DEM (rasterio) or `--synthetic` terrain. |
+| `tools/` | Standalone C++ utilities: `parse_only.cpp`, `parse_build_only.cpp`, `inspect_graph.cpp` (`--sample`, `--dump-nodes`), `get_first_node.cpp`. Built by CMake when `-DBUILD_TOOLS=ON` (default). |
 
 ## Algorithm overview (RouteFinder)
 

@@ -438,6 +438,59 @@ bool Graph::deserialize(std::istream& in) {
     return true;
 }
 
+long Graph::loadElevation(const std::string& path) {
+    std::ifstream in(path, std::ios::binary);
+    if (!in) return -1;
+
+    char magic[4];
+    in.read(magic, 4);
+    uint32_t version = 0;
+    uint64_t count = 0;
+    in.read(reinterpret_cast<char*>(&version), sizeof(version));
+    in.read(reinterpret_cast<char*>(&count), sizeof(count));
+    if (!in || magic[0] != 'V' || magic[1] != 'G' || magic[2] != 'E' || magic[3] != 'L') {
+        return -1;
+    }
+
+    // Read id -> elevation pairs into a lookup, then apply to nodes we actually have.
+    std::unordered_map<long, float> elev;
+    elev.reserve(count);
+    for (uint64_t i = 0; i < count; ++i) {
+        int64_t id = 0;
+        float e = 0.0f;
+        in.read(reinterpret_cast<char*>(&id), sizeof(id));
+        in.read(reinterpret_cast<char*>(&e), sizeof(e));
+        if (!in) break;
+        elev[static_cast<long>(id)] = e;
+    }
+
+    long matched = 0;
+    for (auto& [id, node] : nodes) {
+        auto it = elev.find(id);
+        if (it != elev.end()) {
+            node.elevation = it->second;
+            ++matched;
+        }
+    }
+
+    // Compute signed grade per edge (rise/run). evaluateEdge uses |grade|, so the same
+    // magnitude on the incoming-edge copies is correct for reverse traversal.
+    auto grade_of = [&](long from_id, const Edge& e) -> float {
+        const auto fit = nodes.find(from_id);
+        const auto tit = nodes.find(e.to_node_id);
+        if (fit == nodes.end() || tit == nodes.end() || e.weight <= 0.0) return 0.0f;
+        return static_cast<float>((tit->second.elevation - fit->second.elevation) / e.weight);
+    };
+    for (auto& [from_id, edges] : adjacency_list) {
+        for (auto& e : edges) e.grade = grade_of(from_id, e);
+    }
+    for (auto& [to_id, in_edges] : incoming_adjacency_list) {
+        for (auto& [from_id, e] : in_edges) e.grade = grade_of(from_id, e);
+    }
+
+    return matched;
+}
+
 void Graph::simplifyGraph() {
     struct SimplifyAction {
         long mid_id;

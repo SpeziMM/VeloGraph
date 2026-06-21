@@ -15,6 +15,7 @@ public:
         double weight_quality;     // Prefer good surface quality [0, 1]
         double weight_traffic;     // Penalize high-traffic roads [0, 1]
         double weight_turns;       // Penalize sharp turns [0, 1]
+        double weight_gradient = 0.0;  // Penalize steep slopes [0, 1]; 0 = ignore elevation
         bool is_night_mode;        // Boost safety weight at night
         std::string name;
 
@@ -40,6 +41,8 @@ public:
         double traffic_penalty;     // High-traffic penalty
         double turn_penalty;        // Sharp turns per km, normalized [0, 1]
         double total_distance;      // Total route distance in meters
+        double total_ascent_m = 0.0;    // Sum of positive elevation gain over the route
+        double gradient_penalty = 0.0;  // Mean |slope| normalized [0, 1]
     };
 
     // Predefined user profiles

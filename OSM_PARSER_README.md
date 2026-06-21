@@ -78,30 +78,15 @@ Caching:
 
 ### 2. Visualize the Path
 
-The visualizer now supports three modes:
+Visualize a route with `tools/route_map.py` (Leaflet + OpenStreetMap tiles):
 
 ```bash
-# Basic plot (no external map data)
-python3 visualize_path.py sample_path.json
-
-# With OpenStreetMap background (requires contextily)
-python3 visualize_path.py sample_path.json --mode map
-
-# Interactive HTML map (requires folium)
-python3 visualize_path.py sample_path.json --mode interactive
-
-# Generate all available formats
-python3 visualize_path.py sample_path.json --mode all
-
-# Save to specific file
-python3 visualize_path.py sample_path.json output.png --mode map
+# Render route JSON to an interactive HTML map and open it
+python3 tools/route_map.py output/sample_path.json output/route_map.html
 ```
 
-**Visualization Modes:**
-- `basic` - Simple matplotlib plot with coordinates
-- `map` - Matplotlib with OpenStreetMap tile background (requires `contextily`)
-- `interactive` - Interactive HTML map with zoom/pan (requires `folium`)
-- `all` - Generate all available visualizations
+The map shows the loop polyline, highlights revisited nodes, and renders a stats panel
+(distance, fitness, scenery/quality/traffic/turn breakdown) from the route JSON.
 
 ## Example Output
 
@@ -129,7 +114,7 @@ python3 visualize_path.py sample_path.json output.png --mode map
 
 [VeloGraph] Exporting sample path with 11 nodes...
 [VeloGraph] Sample path exported to sample_path.json
-[VeloGraph] Use 'python3 visualize_path.py sample_path.json' to visualize
+[VeloGraph] Use 'python3 tools/route_map.py sample_path.json' to visualize
 
 [VeloGraph] Engine Ready.
 ```

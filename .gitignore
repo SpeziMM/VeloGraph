@@ -14,6 +14,9 @@ data/*.pbf
 # Generated output (route JSON, maps, graph cache, benchmark logs)
 output/
 
+# Eval harness runs (CSVs + logs, regenerable via tools/eval_quality.py)
+runs/
+
 # Scratch benchmark experiments and compiled standalone tools
 pbf-bench/
 parse_benchmark*.cpp
