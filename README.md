@@ -1,4 +1,4 @@
-VeloGraph: High-Performance Loop Generator
+VeloGraph: High-Performance Loop Generator (unfinished)
 
 VeloGraph is a C++ based routing engine designed to generate circular running and cycling routes (loops) based on user constraints.
 
