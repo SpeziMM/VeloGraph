@@ -11,6 +11,8 @@
 #include <cmath>
 #include <thread>
 #include <atomic>
+#include <stdexcept>
+#include <exception>
 
 RouteFinder::RouteFinder(const Graph& graph, const RouteEvaluator& evaluator, unsigned int seed)
     : graph(graph), evaluator(evaluator),
@@ -20,16 +22,20 @@ RouteFinder::RouteFinder(const Graph& graph, const RouteEvaluator& evaluator, un
 }
 
 std::ostream& RouteFinder::vlog() const {
-    static std::ostream null_sink(nullptr);  // discards (rdbuf == nullptr)
+    thread_local std::ostream null_sink(nullptr);  // discards (rdbuf == nullptr)
     return verbose_ ? std::cout : null_sink;
 }
 
-RouteFinder::RouteResult RouteFinder::findOptimalCycle(long start_node,
+RouteFinder::RouteResult RouteFinder::findOptimalCycle(NodeId start_node,
                                                        double target_distance,
                                                        double distance_tolerance,
                                                        const RouteEvaluator::UserProfile& profile,
                                                        int num_iterations) {
-    RouteResult best_result;
+    if (!graph.getNode(start_node) || !std::isfinite(target_distance) || target_distance <= 0.0 ||
+        !std::isfinite(distance_tolerance) || distance_tolerance < 0.0 || num_iterations <= 0) {
+        throw std::invalid_argument("Invalid route start, distance, tolerance, or iteration count");
+    }
+    RouteResult best_result{};
     best_result.total_distance = 0;
     best_result.fitness_score = -1.0;
     best_result.distance_error = std::numeric_limits<double>::max();
@@ -45,6 +51,7 @@ RouteFinder::RouteResult RouteFinder::findOptimalCycle(long start_node,
     // (base_seed_, i), so results don't depend on scheduling. graph/evaluator/precompute
     // are all read-only here, so no synchronization is needed inside an iteration.
     std::vector<IterationResult> results(num_iterations);
+    std::vector<std::exception_ptr> errors(num_iterations);
     const unsigned hw = std::max(1u, std::thread::hardware_concurrency());
     const unsigned cap = max_threads_ ? max_threads_ : hw;
     const unsigned nthreads = std::min<unsigned>(cap, std::max(1, num_iterations));
@@ -52,15 +59,27 @@ RouteFinder::RouteResult RouteFinder::findOptimalCycle(long start_node,
     std::atomic<int> next_iter{0};
     auto worker = [&]() {
         int i;
-        while ((i = next_iter.fetch_add(1)) < num_iterations) {
-            results[i] = runIteration(i, start_node, target_distance, profile, precompute);
+        while ((i = next_iter.fetch_add(1, std::memory_order_relaxed)) < num_iterations) {
+            try {
+                results[i] = runIteration(i, start_node, target_distance, profile, precompute);
+            } catch (...) {
+                errors[i] = std::current_exception();
+            }
         }
     };
 
     std::vector<std::thread> pool;
     pool.reserve(nthreads);
-    for (unsigned t = 0; t < nthreads; ++t) pool.emplace_back(worker);
+    try {
+        for (unsigned t = 1; t < nthreads; ++t) pool.emplace_back(worker);
+        worker();  // The calling thread is also a worker; no spawn for --threads 1.
+    } catch (...) {
+        for (auto& th : pool) th.join();
+        throw;
+    }
     for (auto& th : pool) th.join();
+
+    for (const auto& error : errors) if (error) std::rethrow_exception(error);
 
     std::cout << "  - Threads: " << nthreads << std::endl;
 
@@ -71,7 +90,11 @@ RouteFinder::RouteResult RouteFinder::findOptimalCycle(long start_node,
     for (int i = 0; i < num_iterations; ++i) {
         if (!results[i].valid) continue;
         ++valid_count;
-        if (results[i].combined > best_combined) {
+        const bool in_tolerance = results[i].distance_error <= target_distance * distance_tolerance;
+        const bool best_in_tolerance = best_idx >= 0 &&
+            results[best_idx].distance_error <= target_distance * distance_tolerance;
+        if (best_idx < 0 || (in_tolerance && !best_in_tolerance) ||
+            (in_tolerance == best_in_tolerance && results[i].combined > best_combined)) {
             best_combined = results[i].combined;
             best_idx = i;
         }
@@ -98,7 +121,7 @@ RouteFinder::RouteResult RouteFinder::findOptimalCycle(long start_node,
 }
 
 RouteFinder::IterationResult RouteFinder::runIteration(
-        int i, long start_node, double target_distance,
+        int i, NodeId start_node, double target_distance,
         const RouteEvaluator::UserProfile& profile,
         const PrecomputeResult& precompute) const {
     IterationResult r;
@@ -109,15 +132,16 @@ RouteFinder::IterationResult RouteFinder::runIteration(
 
     vlog() << "\n--- Iteration " << i + 1 << " ---" << std::endl;
 
-    std::vector<long> path =
-        buildWaypointRoute(start_node, target_distance, profile, precompute, local_rng);
+    std::vector<NodeId> path = greedy_only_
+        ? buildCircularRoute(start_node, target_distance, profile, local_rng)
+        : buildWaypointRoute(start_node, target_distance, profile, precompute, local_rng);
 
-    if (path.size() < 3 || path.front() != path.back()) {
+    if (!isValidCycle(path, start_node)) {
         // Fallback to legacy walk
         path = buildCircularRoute(start_node, target_distance, profile, local_rng);
     }
 
-    if (path.size() < 3 || path.front() != path.back()) {
+    if (!isValidCycle(path, start_node)) {
         vlog() << "  [Optimize] Discarding invalid or incomplete path." << std::endl;
         return r;
     }
@@ -125,6 +149,7 @@ RouteFinder::IterationResult RouteFinder::runIteration(
     improveWith2Opt(path, profile, 500);
     correctDistance(path, start_node, target_distance, profile, local_rng);
 
+    if (!isValidCycle(path, start_node)) return r;
     auto score = evaluator.evaluateRoute(graph, path, profile);
     double actual_distance = score.total_distance;
 
@@ -146,7 +171,7 @@ RouteFinder::IterationResult RouteFinder::runIteration(
     return r;
 }
 
-const Graph::Edge* RouteFinder::getEdge(long from, long to) const {
+const Graph::Edge* RouteFinder::getEdge(NodeId from, NodeId to) const {
     const auto* edges = graph.getEdges(from);
     if (!edges) return nullptr;
     for (const auto& edge : *edges) {
@@ -155,21 +180,26 @@ const Graph::Edge* RouteFinder::getEdge(long from, long to) const {
     return nullptr;
 }
 
-double RouteFinder::getPathDistance(const std::vector<long>& path) const {
+double RouteFinder::getPathDistance(const std::vector<NodeId>& path) const {
     double total = 0.0;
-    for (size_t i = 0; i < path.size() - 1; ++i) {
+    for (size_t i = 0; i + 1 < path.size(); ++i) {
         const auto* edge = getEdge(path[i], path[i + 1]);
         if (edge) total += edge->weight;
     }
     return total;
 }
 
-bool RouteFinder::isValidCycle(const std::vector<long>& path, long start_node) const {
+bool RouteFinder::isValidCycle(const std::vector<NodeId>& path, NodeId start_node) const {
     if (path.size() < 3) return false;
-    return path.front() == start_node && path.back() == start_node;
+    if (path.front() != start_node || path.back() != start_node) return false;
+    for (size_t i = 0; i + 1 < path.size(); ++i) {
+        const auto* edge = getEdge(path[i], path[i + 1]);
+        if (!edge || !isCyclingEdge(*edge, true, true)) return false;
+    }
+    return true;
 }
 
-double RouteFinder::calculateTurnAngle(long prev_node, long current_node, long next_node) const {
+double RouteFinder::calculateTurnAngle(NodeId prev_node, NodeId current_node, NodeId next_node) const {
     const auto* p1 = graph.getNode(prev_node);
     const auto* p2 = graph.getNode(current_node);
     const auto* p3 = graph.getNode(next_node);
@@ -182,7 +212,7 @@ double RouteFinder::distance(const Graph::Node* n1, const Graph::Node* n2) const
     return GeoUtils::distance(n1->lat, n1->lon, n2->lat, n2->lon);
 }
 
-double RouteFinder::distanceFromStart(long node, long start_node) const {
+double RouteFinder::distanceFromStart(NodeId node, NodeId start_node) const {
     const auto* n = graph.getNode(node);
     const auto* s = graph.getNode(start_node);
     return distance(n, s);
@@ -190,6 +220,8 @@ double RouteFinder::distanceFromStart(long node, long start_node) const {
 
 bool RouteFinder::isCyclingEdge(const Graph::Edge& edge, bool at_start_or_end, bool relaxed_mode) const {
     // At start or end of route, allow all paths to leave/return to building area
+    if (edge.highway_class == Graph::HighwayClass::Motorway ||
+        edge.highway_class == Graph::HighwayClass::Trunk) return false;
     if (at_start_or_end) return true;
     
     // Filter out very short edges (often artifacts or connectors)
@@ -212,27 +244,27 @@ bool RouteFinder::isCyclingEdge(const Graph::Edge& edge, bool at_start_or_end, b
     }
 }
 
-std::vector<long> RouteFinder::buildCircularRoute(
-        long start_node,
+std::vector<NodeId> RouteFinder::buildCircularRoute(
+        NodeId start_node,
         double target_distance,
         const RouteEvaluator::UserProfile& profile,
         std::mt19937& rng) const {
     
-    std::vector<long> path;
+    std::vector<NodeId> path;
     path.push_back(start_node);
     
     // Track visit counts to prevent loops
-    std::unordered_map<long, int> visit_counts;
+    std::unordered_map<NodeId, int> visit_counts;
     visit_counts[start_node] = 1;
     
     double current_distance = 0.0;
     
     // Minimum air distance at halfway point: (target / PI) * 0.2
     // This ensures the route goes far enough out before returning, but accounts for road tortuosity
-    double min_air_distance = (target_distance / M_PI) * 0.2;
+    double min_air_distance = (target_distance / GeoUtils::pi) * 0.2;
     double half_distance = target_distance / 2.0;
     
-    long current = start_node;
+    NodeId current = start_node;
     double max_air_dist_reached = 0.0;
     
     vlog() << "  [Build] Target=" << target_distance << "m, min_air_distance=" << min_air_distance << "m at halfway" << std::endl;
@@ -432,7 +464,7 @@ std::vector<long> RouteFinder::buildCircularRoute(
     
     // Only avoid the most recent nodes (last 20% of path or min 10) to prevent immediate backtracking
     // This allows revisiting older parts of the path which are physically distant
-    std::unordered_set<long> recent_nodes;
+    std::unordered_set<NodeId> recent_nodes;
     size_t nodes_to_avoid = std::max(size_t(10), path.size() / 5);
     size_t start_idx = path.size() > nodes_to_avoid ? path.size() - nodes_to_avoid : 0;
     for (size_t i = start_idx; i < path.size(); ++i) {
@@ -445,7 +477,7 @@ std::vector<long> RouteFinder::buildCircularRoute(
     if (return_path.empty()) {
         vlog() << "    [Build] A* return path failed, trying without any avoid..." << std::endl;
         // Fallback: allow ALL nodes except immediate predecessor
-        std::unordered_set<long> minimal_avoid;
+        std::unordered_set<NodeId> minimal_avoid;
         if (path.size() >= 2) {
             minimal_avoid.insert(path[path.size() - 2]);  // Just avoid immediate predecessor
         }
@@ -468,20 +500,20 @@ std::vector<long> RouteFinder::buildCircularRoute(
     return path;
 }
 
-std::vector<long> RouteFinder::findReturnPath(
-        long from_node, long to_node,
+std::vector<NodeId> RouteFinder::findReturnPath(
+        NodeId from_node, NodeId to_node,
         double max_distance,
         const RouteEvaluator::UserProfile& profile,
-        const std::unordered_set<long>& avoid_nodes,
+        const std::unordered_set<NodeId>& avoid_nodes,
         std::mt19937& rng) const {
     
     // A* search allowing ~10% of visited nodes to be revisited
-    // Also consider reverse edges (one-way streets backward)
+    // Traverse only legal forward edges.
     struct SearchNode {
-        long node_id;
-        double g_cost;      // Distance traveled
+        NodeId node_id;
+        double g_cost;      // Fitness-weighted cost
+        double g_dist;      // Actual meters
         double f_cost;      // g + heuristic
-        long parent;
         
         bool operator>(const SearchNode& other) const {
             return f_cost > other.f_cost;
@@ -489,23 +521,23 @@ std::vector<long> RouteFinder::findReturnPath(
     };
     
     std::priority_queue<SearchNode, std::vector<SearchNode>, std::greater<SearchNode>> open_set;
-    std::unordered_map<long, double> g_costs;
-    std::unordered_map<long, long> parents;
+    std::unordered_map<NodeId, double> g_costs;
+    std::unordered_map<NodeId, NodeId> parents;
     
     // Heuristic: straight-line distance to target
-    auto heuristic = [this, to_node](long node) -> double {
+    auto heuristic = [this, to_node](NodeId node) -> double {
         const auto* n = graph.getNode(node);
         const auto* t = graph.getNode(to_node);
         if (!n || !t) return 0.0;
-        double dx = (n->lon - t->lon) * std::cos((n->lat + t->lat) * M_PI / 360.0);
+        double dx = (n->lon - t->lon) * std::cos((n->lat + t->lat) * GeoUtils::pi / 360.0);
         double dy = n->lat - t->lat;
         return std::sqrt(dx*dx + dy*dy) * 111319.5;
     };
     
     // Create a set of nodes we CAN revisit (~10% of avoid_nodes)
-    std::unordered_set<long> can_revisit;
+    std::unordered_set<NodeId> can_revisit;
     if (!avoid_nodes.empty()) {
-        std::vector<long> avoid_vec(avoid_nodes.begin(), avoid_nodes.end());
+        std::vector<NodeId> avoid_vec(avoid_nodes.begin(), avoid_nodes.end());
         size_t revisit_count = std::max(size_t(1), avoid_vec.size() / 3);  // 33% - allow more revisits
         std::shuffle(avoid_vec.begin(), avoid_vec.end(), rng);
         for (size_t i = 0; i < revisit_count && i < avoid_vec.size(); ++i) {
@@ -513,7 +545,7 @@ std::vector<long> RouteFinder::findReturnPath(
         }
     }
     
-    open_set.push({from_node, 0.0, heuristic(from_node), -1});
+    open_set.push({from_node, 0.0, 0.0, heuristic(from_node)});
     g_costs[from_node] = 0.0;
     parents[from_node] = -1;
     
@@ -525,45 +557,25 @@ std::vector<long> RouteFinder::findReturnPath(
         open_set.pop();
         nodes_explored++;
         
+        if (current.g_cost > g_costs.at(current.node_id) + 0.01) continue;
+        if (current.g_dist > max_distance) continue;
         if (current.node_id == to_node) {
             // Reconstruct path
-            std::vector<long> path;
-            long node = to_node;
+            std::vector<NodeId> path;
+            NodeId node = to_node;
             while (node != -1) {
                 path.push_back(node);
                 node = parents[node];
             }
             std::reverse(path.begin(), path.end());
             vlog() << "    [Return] Found path: " << path.size() << " nodes, " << current.g_cost << "m (explored " << nodes_explored << " nodes)" << std::endl;
-            return path;
+            return getPathDistance(path) <= max_distance ? path : std::vector<NodeId>{};
         }
-        
-        // Skip if we've found a better path to this node
-        if (current.g_cost > g_costs[current.node_id] + 0.01) continue;
-        
-        // Skip if too far
-        if (current.g_cost > max_distance) continue;
-        
-        // Collect all edges: forward edges + reverse edges (for one-way streets)
-        std::vector<Graph::Edge> all_edges;
         
         const auto* forward_edges = graph.getEdges(current.node_id);
-        if (forward_edges) {
-            for (const auto& e : *forward_edges) {
-                all_edges.push_back(e);
-            }
-        }
-        
-        // Add reverse edges (allows traversing one-way streets backward)
-        auto reverse_edges = graph.getIncomingEdges(current.node_id);
-        for (const auto& [from_id, rev_edge] : reverse_edges) {
-            // Create edge pointing to from_id
-            Graph::Edge backward_edge = rev_edge;
-            backward_edge.to_node_id = from_id;
-            all_edges.push_back(backward_edge);
-        }
-        
-        for (const auto& edge : all_edges) {
+        if (!forward_edges) continue;
+        for (const auto& edge : *forward_edges) {
+            if (!isCyclingEdge(edge, true, true)) continue;
             // Check if we can visit this node
             bool is_target = (edge.to_node_id == to_node);
             bool in_avoid = avoid_nodes.find(edge.to_node_id) != avoid_nodes.end();
@@ -581,7 +593,8 @@ std::vector<long> RouteFinder::findReturnPath(
             double new_g = current.g_cost + edge_cost;
             
             // Check if this exceeds max distance
-            if (current.g_cost > max_distance) {
+            const double new_dist = current.g_dist + edge.weight;
+            if (new_dist > max_distance) {
                 continue;
             }
             
@@ -589,7 +602,7 @@ std::vector<long> RouteFinder::findReturnPath(
                 g_costs[edge.to_node_id] = new_g;
                 parents[edge.to_node_id] = current.node_id;
                 double f = new_g + heuristic(edge.to_node_id);
-                open_set.push({edge.to_node_id, new_g, f, current.node_id});
+                open_set.push({edge.to_node_id, new_g, new_dist, f});
             }
         }
     }
@@ -599,7 +612,7 @@ std::vector<long> RouteFinder::findReturnPath(
 }
 
 void RouteFinder::improveWith2Opt(
-        std::vector<long>& path,
+        std::vector<NodeId>& path,
         const RouteEvaluator::UserProfile& profile,
         int max_iterations) const {
     
@@ -614,8 +627,15 @@ void RouteFinder::improveWith2Opt(
         // Try all 2-opt swaps
         for (size_t i = 1; i < path.size() - 2; ++i) {
             for (size_t j = i + 1; j < path.size() - 1; ++j) {
+                // Most swaps have no boundary connection. Reject before allocating/copying.
+                if (!getEdge(path[i - 1], path[j]) || !getEdge(path[i], path[j + 1])) continue;
+                bool reversible = true;
+                for (size_t k = i; k < j; ++k) {
+                    if (!getEdge(path[k + 1], path[k])) { reversible = false; break; }
+                }
+                if (!reversible) continue;
                 // Create new path with segment [i,j] reversed
-                std::vector<long> new_path = path;
+                std::vector<NodeId> new_path = path;
                 std::reverse(new_path.begin() + i, new_path.begin() + j + 1);
                 
                 // Check if edges exist in reversed segment
@@ -663,8 +683,8 @@ void RouteFinder::improveWith2Opt(
 
 // ======================== NEW: Waypoint-driven route builder ========================
 
-std::vector<long> RouteFinder::buildWaypointRoute(
-        long start_node,
+std::vector<NodeId> RouteFinder::buildWaypointRoute(
+        NodeId start_node,
         double target_distance,
         const RouteEvaluator::UserProfile& profile,
         const PrecomputeResult& precompute,
@@ -679,7 +699,7 @@ std::vector<long> RouteFinder::buildWaypointRoute(
 
     vlog() << "  [WP] Generated " << templ.waypoints.size() << " waypoints" << std::endl;
 
-    std::vector<long> waypoint_ids;
+    std::vector<NodeId> waypoint_ids;
     waypoint_ids.push_back(start_node);
     for (const auto& wp : templ.waypoints) {
         waypoint_ids.push_back(wp.node_id);
@@ -688,17 +708,17 @@ std::vector<long> RouteFinder::buildWaypointRoute(
 
     int N_segments = static_cast<int>(waypoint_ids.size()) - 1;
 
-    std::vector<long> full_path;
+    std::vector<NodeId> full_path;
     full_path.push_back(start_node);
 
     double distance_spent = 0.0;
-    std::unordered_set<long> used_nodes;
+    std::unordered_set<NodeId> used_nodes;
     used_nodes.insert(start_node);
     int failed_segments = 0;
 
     for (int seg = 0; seg < N_segments; ++seg) {
-        long from = waypoint_ids[seg];
-        long to = waypoint_ids[seg + 1];
+        NodeId from = waypoint_ids[seg];
+        NodeId to = waypoint_ids[seg + 1];
 
         double remaining_total = target_distance - distance_spent;
         double remaining_segments = N_segments - seg;
@@ -724,7 +744,7 @@ std::vector<long> RouteFinder::buildWaypointRoute(
         }
 
         if (segment_path.empty()) {
-            std::unordered_set<long> empty_avoid;
+            std::unordered_set<NodeId> empty_avoid;
             segment_path = findReturnPath(from, to, this_segment_target * 5.0, profile, empty_avoid, rng);
         }
 
@@ -761,29 +781,28 @@ std::vector<long> RouteFinder::buildWaypointRoute(
 
 // ======================== NEW: Budget-aware segment A* ========================
 
-std::vector<long> RouteFinder::findSegmentPath(
-        long from_node, long to_node,
+std::vector<NodeId> RouteFinder::findSegmentPath(
+        NodeId from_node, NodeId to_node,
         double target_segment_distance,
         double max_segment_distance,
         const RouteEvaluator::UserProfile& profile,
         const PrecomputeResult& precompute,
-        const std::unordered_set<long>& avoid_nodes,
+        const std::unordered_set<NodeId>& avoid_nodes,
         std::mt19937& rng) const {
 
     struct SearchNode {
-        long node_id;
+        NodeId node_id;
         double g_cost;
         double g_dist;
         double f_cost;
-        long parent;
         bool operator>(const SearchNode& other) const { return f_cost > other.f_cost; }
     };
 
-    auto air_dist_to_goal = [this, to_node](long node) -> double {
+    auto air_dist_to_goal = [this, to_node](NodeId node) -> double {
         return distanceFromStart(node, to_node);
     };
 
-    auto heuristic = [&](long node, double g_dist) -> double {
+    auto heuristic = [&](NodeId node, double g_dist) -> double {
         double h_air = air_dist_to_goal(node);
         double remaining_budget = target_segment_distance - g_dist;
         if (remaining_budget > h_air) {
@@ -793,13 +812,12 @@ std::vector<long> RouteFinder::findSegmentPath(
     };
 
     std::priority_queue<SearchNode, std::vector<SearchNode>, std::greater<SearchNode>> open_set;
-    std::unordered_map<long, double> g_costs;
-    std::unordered_map<long, double> g_dists;
-    std::unordered_map<long, long> parents;
+    std::unordered_map<NodeId, double> g_costs;
+    std::unordered_map<NodeId, NodeId> parents;
 
-    std::unordered_set<long> can_revisit;
+    std::unordered_set<NodeId> can_revisit;
     if (!avoid_nodes.empty()) {
-        std::vector<long> avoid_vec(avoid_nodes.begin(), avoid_nodes.end());
+        std::vector<NodeId> avoid_vec(avoid_nodes.begin(), avoid_nodes.end());
         size_t revisit_count = std::max(size_t(1), avoid_vec.size() / 3);
         std::shuffle(avoid_vec.begin(), avoid_vec.end(), rng);
         for (size_t i = 0; i < revisit_count && i < avoid_vec.size(); ++i) {
@@ -807,9 +825,8 @@ std::vector<long> RouteFinder::findSegmentPath(
         }
     }
 
-    open_set.push({from_node, 0.0, 0.0, heuristic(from_node, 0.0), -1});
+    open_set.push({from_node, 0.0, 0.0, heuristic(from_node, 0.0)});
     g_costs[from_node] = 0.0;
-    g_dists[from_node] = 0.0;
     parents[from_node] = -1;
 
     int nodes_explored = 0;
@@ -821,8 +838,8 @@ std::vector<long> RouteFinder::findSegmentPath(
         nodes_explored++;
 
         if (current.node_id == to_node) {
-            std::vector<long> path;
-            long node = to_node;
+            std::vector<NodeId> path;
+            NodeId node = to_node;
             while (node != -1) {
                 path.push_back(node);
                 node = parents[node];
@@ -834,7 +851,7 @@ std::vector<long> RouteFinder::findSegmentPath(
         if (current.g_cost > g_costs[current.node_id] + 0.01) continue;
         if (current.g_dist > max_segment_distance) continue;
 
-        auto process_edge = [&](const Graph::Edge& edge, long target_id) {
+        auto process_edge = [&](const Graph::Edge& edge, NodeId target_id) {
             if (!RoutePrecompute::isCyclingEdge(edge, true)) return;
 
             bool is_target = (target_id == to_node);
@@ -854,10 +871,9 @@ std::vector<long> RouteFinder::findSegmentPath(
 
             if (g_costs.find(target_id) == g_costs.end() || new_g < g_costs[target_id]) {
                 g_costs[target_id] = new_g;
-                g_dists[target_id] = new_dist;
                 parents[target_id] = current.node_id;
                 double f = new_g + heuristic(target_id, new_dist);
-                open_set.push({target_id, new_g, new_dist, f, current.node_id});
+                open_set.push({target_id, new_g, new_dist, f});
             }
         };
 
@@ -868,12 +884,7 @@ std::vector<long> RouteFinder::findSegmentPath(
             }
         }
 
-        auto incoming = graph.getIncomingEdges(current.node_id);
-        for (const auto& [from_id, rev_edge] : incoming) {
-            Graph::Edge backward_edge = rev_edge;
-            backward_edge.to_node_id = from_id;
-            process_edge(backward_edge, from_id);
-        }
+
     }
 
     return {};
@@ -882,8 +893,8 @@ std::vector<long> RouteFinder::findSegmentPath(
 // ======================== NEW: Distance correction ========================
 
 void RouteFinder::correctDistance(
-        std::vector<long>& path,
-        long start_node,
+        std::vector<NodeId>& path,
+        NodeId start_node,
         double target_distance,
         const RouteEvaluator::UserProfile& profile,
         std::mt19937& rng) const {
@@ -896,7 +907,7 @@ void RouteFinder::correctDistance(
     if (error_ratio > 0.10 && path.size() > 6) {
         // Too long: try to shortcut a random segment
         double best_new_dist = actual;
-        std::vector<long> best_path = path;
+        std::vector<NodeId> best_path = path;
 
         for (int attempt = 0; attempt < 10; ++attempt) {
             std::uniform_int_distribution<size_t> idx_dist(1, path.size() - 3);
@@ -906,11 +917,11 @@ void RouteFinder::correctDistance(
             std::uniform_int_distribution<size_t> j_dist(i + 2, max_j);
             size_t j = j_dist(rng);
 
-            std::unordered_set<long> empty_avoid;
+            std::unordered_set<NodeId> empty_avoid;
             auto shortcut = findReturnPath(path[i], path[j], actual * 0.5, profile, empty_avoid, rng);
             if (shortcut.empty()) continue;
 
-            std::vector<long> new_path;
+            std::vector<NodeId> new_path;
             new_path.insert(new_path.end(), path.begin(), path.begin() + i);
             new_path.insert(new_path.end(), shortcut.begin(), shortcut.end());
             new_path.insert(new_path.end(), path.begin() + j + 1, path.end());
@@ -953,7 +964,7 @@ void RouteFinder::correctDistance(
         for (const auto& edge : *edges) {
             if (!RoutePrecompute::isCyclingEdge(edge, true)) continue;
 
-            std::unordered_set<long> empty_avoid;
+            std::unordered_set<NodeId> empty_avoid;
             auto detour_out = findReturnPath(path[max_air_idx], edge.to_node_id,
                                              deficit * 0.6, profile, empty_avoid, rng);
             if (detour_out.empty()) continue;
@@ -974,7 +985,7 @@ void RouteFinder::correctDistance(
 
             if (detour_dist < deficit * 0.3 || detour_dist > deficit * 1.5) continue;
 
-            std::vector<long> new_path;
+            std::vector<NodeId> new_path;
             new_path.insert(new_path.end(), path.begin(), path.begin() + max_air_idx);
             new_path.insert(new_path.end(), detour_out.begin(), detour_out.end());
             for (size_t k = 1; k < detour_back.size(); ++k) {

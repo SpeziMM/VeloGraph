@@ -5,6 +5,10 @@
 #include <iomanip>
 #include <algorithm>
 #include <chrono>
+#include <charconv>
+#include <filesystem>
+#include <stdexcept>
+#include <string_view>
 #include "../include/Graph.hpp"
 #include "../include/OSMParser.hpp"
 #include "../include/RouteEvaluator.hpp"
@@ -12,24 +16,31 @@
 
 // Per-run metadata for the eval harness (tools/eval_quality.py reads these).
 struct RunMeta {
-    long start_node = -1;
+    NodeId start_node = -1;
     double target_distance = 0.0;
     int iterations = 0;
     unsigned int seed = 0;
     bool success = false;
     double wall_time_ms = 0.0;
+    std::string engine = "hybrid";
+    bool within_tolerance = false;
     double distance_error = 0.0;  // |actual - target|, only meaningful when success
 };
 
-void exportPathToJSON(const Graph& graph, const std::vector<long>& path_ids,
+void exportPathToJSON(const Graph& graph, const std::vector<NodeId>& path_ids,
                       const std::string& filename,
                       const RunMeta& meta,
                       const RouteEvaluator::RouteScore* score = nullptr) {
+    const auto parent = std::filesystem::path(filename).parent_path();
+    if (!parent.empty()) std::filesystem::create_directories(parent);
     std::ofstream out(filename);
+    out.exceptions(std::ios::failbit | std::ios::badbit);
     out << std::fixed << std::setprecision(6);
     out << "{\n";
 
     out << "  \"run\": {\n";
+    out << "    \"engine\": \"" << meta.engine << "\",\n";
+    out << "    \"within_tolerance\": " << (meta.within_tolerance ? "true" : "false") << ",\n";
     out << "    \"start_node\": " << meta.start_node << ",\n";
     out << "    \"target_distance_m\": " << meta.target_distance << ",\n";
     out << "    \"iterations\": " << meta.iterations << ",\n";
@@ -73,30 +84,41 @@ void exportPathToJSON(const Graph& graph, const std::vector<long>& path_ids,
 }
 
 void printUsage(const char* prog_name) {
-    std::cerr << "Usage: " << prog_name << " <osm_file.pbf> [options]" << std::endl;
-    std::cerr << "\nOptions:" << std::endl;
-    std::cerr << "  --start <lat> <lon>     Start coordinates" << std::endl;
-    std::cerr << "  --distance <meters>     Target route distance (default: 5000)" << std::endl;
-    std::cerr << "  --profile <name>        User profile: scenic, safe-night, mountain-bike, casual" << std::endl;
-    std::cerr << "  --iterations <n>        Search iterations (default: 10)" << std::endl;
-    std::cerr << "  --tolerance <fraction>  Distance tolerance fraction (default: 0.1)" << std::endl;
-    std::cerr << "  --seed <n>              RNG seed for reproducible routes (default: 0 = random)" << std::endl;
-    std::cerr << "  --threads <n>           Worker threads for the search (default: 0 = auto)" << std::endl;
-    std::cerr << "  --elevation <file>      Elevation sidecar (tools/build_elevation.py) for hill-aware routing" << std::endl;
-    std::cerr << "  --weight_gradient <w>   Penalize steep slopes [0-1] (default: from profile, 0)" << std::endl;
-    std::cerr << "\nCustom weights (override profile, values 0.0-1.0):" << std::endl;
-    std::cerr << "  --safety <weight>       Weight for lit streets (default: from profile)" << std::endl;
-    std::cerr << "  --scenery <weight>      Weight for scenic/low-traffic (default: from profile)" << std::endl;
-    std::cerr << "  --quality <weight>      Weight for surface quality (default: from profile)" << std::endl;
-    std::cerr << "  --traffic <weight>      Penalty for high-traffic roads (default: from profile)" << std::endl;
-    std::cerr << "  --night                 Enable night mode (boost safety weight)" << std::endl;
-    std::cerr << "  --no_simplify           Skip graph simplification (faster startup)" << std::endl;
-    std::cerr << "\nExamples:" << std::endl;
-    std::cerr << "  " << prog_name << " data/map.osm.pbf --start 49.0069 8.4037 --distance 10000 --profile scenic" << std::endl;
-    std::cerr << "  " << prog_name << " data/map.osm.pbf --start 49.0069 8.4037 --safety 0.5 --quality 0.3 --night" << std::endl;
+    std::cerr << "Usage: " << prog_name << " <osm_file.pbf> [options]\n"
+        "  --start_node <id>         OSM start node (or use --start)\n"
+        "  --start <lat> <lon>       Snap coordinates to nearest node\n"
+        "  --distance <meters>      Target distance; --target_distance is an alias (5000)\n"
+        "  --profile <name>         scenic, safe-night, mountain-bike, casual\n"
+        "  --iterations <n>         Positive iteration count (10)\n"
+        "  --tolerance <fraction>   Prefer routes within this distance tolerance (0.1)\n"
+        "  --engine <name>          hybrid or greedy (hybrid)\n"
+        "  --seed <n>               0 = random; nonzero = reproducible\n"
+        "  --threads <n>            0 = hardware concurrency\n"
+        "  --elevation <file>       Elevation sidecar\n"
+        "  --weight_turns <w>       Turn penalty [0,1]\n"
+        "  --weight_gradient <w>    Slope penalty [0,1]\n"
+        "  --no_simplify            Skip degree-2 graph simplification\n"
+        "  --output_path <file>     Output JSON (output/sample_path.json)\n";
 }
 
-int main(int argc, char* argv[]) {
+template <typename T>
+T parseInteger(std::string_view text) {
+    T value{};
+    const auto result = std::from_chars(text.data(), text.data() + text.size(), value);
+    if (result.ec != std::errc{} || result.ptr != text.data() + text.size())
+        throw std::invalid_argument("Invalid integer: " + std::string(text));
+    return value;
+}
+
+double parseNumber(const std::string& text) {
+    size_t used = 0;
+    const double value = std::stod(text, &used);
+    if (used != text.size() || !std::isfinite(value))
+        throw std::invalid_argument("Invalid finite number: " + text);
+    return value;
+}
+
+int main(int argc, char* argv[]) try {
     std::cout << "[VeloGraph] Initializing Route Engine..." << std::endl;
 
     // Check for PBF file argument
@@ -105,14 +127,17 @@ int main(int argc, char* argv[]) {
         return 1;
     }
 
+    if (std::string_view(argv[1]) == "--help") { printUsage(argv[0]); return 0; }
     std::string pbf_file = argv[1];
-    long start_node_id = -1;
+    NodeId start_node_id = -1;
     double start_lat = 0.0, start_lon = 0.0;
     bool use_lat_lon = false;
     double target_distance = 5000.0;
-    std::string profile_name = "bike_commute";
+    std::string profile_name = "scenic";
     std::string output_path = "output/sample_path.json";
     int iterations = 10;
+    double tolerance = .1;
+    std::string engine = "hybrid";
     bool simplify = true;
     double custom_turn_weight = -1.0;
     double custom_gradient_weight = -1.0;
@@ -120,38 +145,41 @@ int main(int argc, char* argv[]) {
     unsigned int seed = 0;  // 0 = nondeterministic; nonzero = reproducible
     unsigned int threads = 0;  // 0 = auto (hardware_concurrency)
 
-    for (int i = 1; i < argc; ++i) {
-        std::string arg = argv[i];
-        if (arg == "--start_node" && i + 1 < argc) {
-            start_node_id = std::stol(argv[++i]);
-        } else if (arg == "--start" && i + 2 < argc) {
-            start_lat = std::stod(argv[++i]);
-            start_lon = std::stod(argv[++i]);
-            use_lat_lon = true;
-        } else if (arg == "--target_distance" && i + 1 < argc) {
-            target_distance = std::stod(argv[++i]);
-        } else if (arg == "--distance" && i + 1 < argc) {
-            target_distance = std::stod(argv[++i]);
-        } else if (arg == "--profile" && i + 1 < argc) {
-            profile_name = argv[++i];
-        } else if (arg == "--output_path" && i + 1 < argc) {
-            output_path = argv[++i];
-        } else if (arg == "--iterations" && i + 1 < argc) {
-            iterations = std::max(1, std::stoi(argv[++i]));
-        } else if (arg == "--weight_turns" && i + 1 < argc) {
-            custom_turn_weight = std::stod(argv[++i]);
-        } else if (arg == "--seed" && i + 1 < argc) {
-            seed = static_cast<unsigned int>(std::stoul(argv[++i]));
-        } else if (arg == "--threads" && i + 1 < argc) {
-            threads = static_cast<unsigned int>(std::stoul(argv[++i]));
-        } else if (arg == "--elevation" && i + 1 < argc) {
-            elevation_file = argv[++i];
-        } else if (arg == "--weight_gradient" && i + 1 < argc) {
-            custom_gradient_weight = std::stod(argv[++i]);
-        } else if (arg == "--no_simplify") {
-            simplify = false;
-        }
+    for (int i = 2; i < argc; ++i) {
+        const std::string arg = argv[i];
+        auto next = [&]() -> std::string {
+            if (i + 1 >= argc) throw std::invalid_argument("Missing value for " + arg);
+            return argv[++i];
+        };
+        if (arg == "--start_node") start_node_id = parseInteger<NodeId>(next());
+        else if (arg == "--start") {
+            start_lat = parseNumber(next()); start_lon = parseNumber(next()); use_lat_lon = true;
+        } else if (arg == "--distance" || arg == "--target_distance") target_distance = parseNumber(next());
+        else if (arg == "--profile") profile_name = next();
+        else if (arg == "--output_path") output_path = next();
+        else if (arg == "--iterations") iterations = parseInteger<int>(next());
+        else if (arg == "--seed") seed = parseInteger<unsigned>(next());
+        else if (arg == "--threads") threads = parseInteger<unsigned>(next());
+        else if (arg == "--tolerance") tolerance = parseNumber(next());
+        else if (arg == "--engine") engine = next();
+        else if (arg == "--elevation") elevation_file = next();
+        else if (arg == "--weight_turns" || arg == "--weight_gradient") {
+            const auto value = parseNumber(next());
+            if (value < 0 || value > 1) throw std::invalid_argument(arg + " must be in [0,1]");
+            if (arg == "--weight_turns") custom_turn_weight = value;
+            else custom_gradient_weight = value;
+        } else if (arg == "--no_simplify") simplify = false;
+        else throw std::invalid_argument("Unknown option: " + arg);
     }
+    if (target_distance <= 0 || iterations <= 0 || tolerance < 0 || tolerance > 1)
+        throw std::invalid_argument("Distance and iterations must be positive; tolerance must be in [0,1]");
+    if (std::abs(start_lat) > 90 || std::abs(start_lon) > 180)
+        throw std::invalid_argument("Coordinates outside latitude/longitude range");
+    if (engine != "hybrid" && engine != "greedy") throw std::invalid_argument("Unknown engine: " + engine);
+    if (profile_name != "scenic" && profile_name != "safe-night" &&
+        profile_name != "mountain-bike" && profile_name != "casual" &&
+        profile_name != "night" && profile_name != "mtb" && profile_name != "commuter")
+        throw std::invalid_argument("Unknown profile: " + profile_name);
 
     if (start_node_id == -1 && !use_lat_lon) {
         std::cerr << "Error: --start_node <id> or --start <lat> <lon> is required." << std::endl;
@@ -180,9 +208,9 @@ int main(int argc, char* argv[]) {
     // Optional elevation overlay (sidecar from tools/build_elevation.py)
     if (!elevation_file.empty()) {
         std::cout << "\n[VeloGraph] Loading elevation from " << elevation_file << "..." << std::endl;
-        long matched = graph.loadElevation(elevation_file);
+        const auto matched = graph.loadElevation(elevation_file);
         if (matched < 0) {
-            std::cerr << "[VeloGraph] Failed to read elevation sidecar (ignoring)." << std::endl;
+            throw std::runtime_error("Failed to read requested elevation sidecar");
         } else {
             std::cout << "  - Elevation applied to " << matched << " nodes" << std::endl;
         }
@@ -222,15 +250,18 @@ int main(int argc, char* argv[]) {
         // Find optimal cycle route
         RouteFinder finder(graph, evaluator, seed);
         finder.setThreads(threads);
+        finder.setGreedyOnly(engine == "greedy");
         auto t0 = std::chrono::steady_clock::now();
-        auto result = finder.findOptimalCycle(start_node->id, target_distance, 0.1, profile, iterations);
+        auto result = finder.findOptimalCycle(start_node->id, target_distance, tolerance, profile, iterations);
         auto t1 = std::chrono::steady_clock::now();
 
         RunMeta meta;
         meta.start_node = start_node->id;
         meta.target_distance = target_distance;
         meta.iterations = iterations;
-        meta.seed = seed;
+        meta.seed = finder.seed();
+        meta.engine = engine;
+        meta.within_tolerance = !result.path.empty() && result.distance_error <= target_distance * tolerance;
         meta.success = !result.path.empty();
         meta.wall_time_ms = std::chrono::duration<double, std::milli>(t1 - t0).count();
         // distance_error stays DBL_MAX when nothing was found; report 0 on failure.
@@ -250,11 +281,17 @@ int main(int argc, char* argv[]) {
             std::cerr << "[VeloGraph] Could not find a valid cycle route!" << std::endl;
             // Still emit JSON (empty path, success=false) so the eval harness can record the failure.
             exportPathToJSON(graph, result.path, output_path, meta, nullptr);
+            return 2;
         }
     } else {
         std::cerr << "[VeloGraph] Could not find start node with ID: " << start_node_id << std::endl;
+        return 1;
     }
     
     std::cout << "\n[VeloGraph] Engine Finished." << std::endl;
     return 0;
+}
+ catch (const std::exception& error) {
+    std::cerr << "Error: " << error.what() << '\n';
+    return 1;
 }

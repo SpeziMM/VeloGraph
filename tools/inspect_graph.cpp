@@ -58,7 +58,7 @@ int main(int argc, char** argv) {
 
     // Dump mode: emit 'id lat lon' for every node referenced by the graph.
     if (dump_nodes) {
-        std::vector<long> ids;
+        std::vector<NodeId> ids;
         for (const auto& [node_id, edges] : graph.getAdjacencyList()) {
             ids.push_back(node_id);
             for (const auto& e : edges) ids.push_back(e.to_node_id);
@@ -66,7 +66,7 @@ int main(int argc, char** argv) {
         std::sort(ids.begin(), ids.end());
         ids.erase(std::unique(ids.begin(), ids.end()), ids.end());
         std::cout.precision(8);
-        for (long id : ids) {
+        for (NodeId id : ids) {
             const auto* n = graph.getNode(id);
             if (n) std::cout << n->id << " " << n->lat << " " << n->lon << "\n";
         }
@@ -75,7 +75,7 @@ int main(int argc, char** argv) {
 
     // Sample mode: emit N well-connected node IDs for the eval harness, reproducibly.
     if (sample_n > 0) {
-        std::vector<long> candidates;
+        std::vector<NodeId> candidates;
         for (const auto& [node_id, edges] : graph.getAdjacencyList()) {
             if (edges.size() >= 3) candidates.push_back(node_id);
         }
@@ -87,11 +87,11 @@ int main(int argc, char** argv) {
         return 0;
     }
 
-    long best_node = -1;
+    NodeId best_node = -1;
     size_t best_degree = 0;
-    long best_weight_node = -1;
+    NodeId best_weight_node = -1;
     double best_weight_sum = 0.0;
-    long best_long_edge_node = -1;
+    NodeId best_long_edge_node = -1;
     double best_long_edge_sum = 0.0;
 
     for (const auto& [node_id, edges] : graph.getAdjacencyList()) {
@@ -119,7 +119,7 @@ int main(int argc, char** argv) {
     std::cout << "max_weight_node " << best_weight_node << " " << best_weight_sum << "\n";
     std::cout << "max_weight_degree4_node " << best_long_edge_node << " " << best_long_edge_sum << "\n";
 
-    const long start_node = 163816;
+    const NodeId start_node = 163816;
     const auto* edges = graph.getEdges(start_node);
     std::cout << "start_node_degree " << start_node << " " << (edges ? edges->size() : 0) << "\n";
 

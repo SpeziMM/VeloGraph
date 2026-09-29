@@ -1,0 +1,16 @@
+name: C++ checks
+on: [push, pull_request]
+permissions:
+  contents: read
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        build_type: [Release, Debug]
+    steps:
+      - uses: actions/checkout@v4
+      - run: sudo apt-get update && sudo apt-get install -y libosmium2-dev libprotozero-dev libbz2-dev libexpat1-dev zlib1g-dev
+      - run: cmake -S . -B build -DCMAKE_BUILD_TYPE=${{ matrix.build_type }} -DVELOGRAPH_SANITIZERS=${{ matrix.build_type == 'Debug' && 'ON' || 'OFF' }}
+      - run: cmake --build build --parallel 2
+      - run: ctest --test-dir build --output-on-failure

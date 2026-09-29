@@ -9,7 +9,7 @@
 class WaypointGenerator {
 public:
     struct Waypoint {
-        long node_id;
+        NodeId node_id;
         double lat;
         double lon;
         double shortest_home;
@@ -21,7 +21,7 @@ public:
 
     static WaypointTemplate generate(
         const Graph& graph,
-        long start_node,
+        NodeId start_node,
         double target_distance,
         const PrecomputeResult& precompute,
         std::mt19937& rng);

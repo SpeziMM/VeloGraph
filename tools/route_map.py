@@ -3,7 +3,7 @@
 VeloGraph route map renderer.
 
 Reads a route JSON (as produced by VeloGraph --output_path) and writes a
-self-contained Leaflet HTML map on real OpenStreetMap tiles. The polyline is
+Leaflet HTML map (CDN and tiles require network access) on real OpenStreetMap tiles. The polyline is
 colored by traversal order (start -> end) so out-and-back spurs and segment
 structure are visible. Start node is marked; revisited nodes are highlighted.
 
@@ -11,8 +11,8 @@ Usage:
     python3 tools/route_map.py output/demo_route.json output/route_map.html
 """
 
+import argparse
 import json
-import sys
 import os
 import webbrowser
 from collections import Counter
@@ -30,6 +30,8 @@ HTML = """<!DOCTYPE html>
   .panel {{ position:absolute; top:12px; right:12px; z-index:1000; background:#fff;
            border:1px solid #ccc; border-radius:8px; padding:12px 14px; width:230px;
            box-shadow:0 1px 4px rgba(0,0,0,.2); font-size:13px; line-height:1.5; }}
+  @media (max-width: 600px) {{ .panel {{ width:190px; font-size:12px; max-height:48vh; overflow:auto; }} }}
+  button, input {{ font:inherit; }}
   .panel h3 {{ margin:0 0 8px; font-size:15px; font-weight:600; }}
   .panel .row {{ display:flex; justify-content:space-between; }}
   .panel .row span:last-child {{ font-weight:600; }}
@@ -43,7 +45,9 @@ HTML = """<!DOCTYPE html>
 <body>
 <div id="map"></div>
 <div class="panel">
-  <h3>Route stats</h3>
+  <h3>VeloGraph · final loop</h3>
+  <p>Nearby graph → ellipse waypoints → segment search → refinement → best valid loop.</p>
+  <p><strong>{target_status}</strong></p>
   <div class="row"><span>Distance</span><span>{dist_km} km</span></div>
   <div class="row"><span>Fitness</span><span>{fitness}</span></div>
   <div class="row"><span>Scenery</span><span>{scenery}</span></div>
@@ -52,6 +56,11 @@ HTML = """<!DOCTYPE html>
   <div class="row"><span>Turn pen.</span><span>{turns}</span></div>
   <div class="row"><span>Nodes</span><span>{n_nodes}</span></div>
   <div class="row"><span>Revisited</span><span>{n_rev}</span></div>
+  <p>Playback follows the final route, not internal search steps.</p>
+  <button id="play" type="button">Play route</button>
+  <label for="position">Route progress</label>
+  <input id="position" type="range" min="0" max="{last_node}" value="0" style="width:100%"/>
+  <output id="progress" for="position">0%</output>
 </div>
 <div class="legend">
   Traversal order
@@ -91,6 +100,26 @@ HTML = """<!DOCTYPE html>
   L.marker(coords[0]).addTo(map).bindPopup('Start / finish');
 
   map.fitBounds(L.latLngBounds(coords).pad(0.15));
+  const marker = L.circleMarker(coords[0], {{radius:8, color:'#111', fillColor:'#fff', fillOpacity:1}}).addTo(map);
+  const slider = document.getElementById('position');
+  const play = document.getElementById('play');
+  let timer = null;
+  function stopPlayback() {{ clearInterval(timer); timer = null; play.textContent = 'Play route'; }}
+  function showProgress() {{
+    marker.setLatLng(coords[Number(slider.value)]);
+    document.getElementById('progress').textContent = Math.round(100 * slider.value / Math.max(1, coords.length - 1)) + '%';
+  }}
+  slider.addEventListener('input', () => {{ stopPlayback(); showProgress(); }});
+  play.addEventListener('click', () => {{
+    if (timer) {{ stopPlayback(); return; }}
+    if (Number(slider.value) === coords.length - 1) slider.value = 0;
+    play.textContent = 'Pause';
+    timer = setInterval(() => {{
+      slider.value = Math.min(coords.length - 1, Number(slider.value) + Math.max(1, Math.ceil(coords.length / 60)));
+      showProgress();
+      if (Number(slider.value) === coords.length - 1) stopPlayback();
+    }}, 100);
+  }});
 </script>
 </body>
 </html>
@@ -98,11 +127,17 @@ HTML = """<!DOCTYPE html>
 
 
 def main():
-    in_file = sys.argv[1] if len(sys.argv) > 1 else "output/demo_route.json"
-    out_file = sys.argv[2] if len(sys.argv) > 2 else "output/route_map.html"
-
-    data = json.load(open(in_file))
-    nodes = data["nodes"]
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('input', nargs='?', default='output/demo_route.json')
+    parser.add_argument('output', nargs='?', default='output/route_map.html')
+    parser.add_argument('--no-open', action='store_true')
+    args = parser.parse_args()
+    in_file, out_file = args.input, args.output
+    with open(in_file) as source:
+        data = json.load(source)
+    nodes = data['nodes']
+    if not nodes:
+        parser.error('The route is empty: generate a successful route before rendering a map.')
     stats = data.get("stats", {})
 
     coords = [[round(n["lat"], 6), round(n["lon"], 6)] for n in nodes]
@@ -119,6 +154,9 @@ def main():
 
     html = HTML.format(
         coords=json.dumps(coords),
+        last_node=len(nodes) - 1,
+        target_status=('Within requested distance tolerance' if data.get('run', {}).get('within_tolerance')
+                       else 'Best effort · target tolerance not confirmed'),
         revisited=json.dumps(revisited),
         dist_km=f"{stats.get('total_distance_m', 0)/1000:.2f}",
         fitness=f"{stats.get('fitness_score', 0):.3f}",
@@ -130,11 +168,13 @@ def main():
         n_rev=len(rev_ids),
     )
 
+    os.makedirs(os.path.dirname(out_file) or ".", exist_ok=True)
     with open(out_file, "w") as f:
         f.write(html)
     abs_path = os.path.abspath(out_file)
     print(f"Map written to {abs_path}")
-    webbrowser.open(f"file://{abs_path}")
+    if not args.no_open:
+        webbrowser.open(f"file://{abs_path}")
 
 
 if __name__ == "__main__":

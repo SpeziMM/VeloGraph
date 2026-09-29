@@ -26,7 +26,7 @@ import sys
 import tempfile
 
 FIELDS = [
-    "start_node", "success", "wall_time_ms", "total_distance_m",
+    "start_node", "success", "within_tolerance", "wall_time_ms", "total_distance_m",
     "distance_error_m", "fitness_score", "safety_score", "scenery_score",
     "quality_score", "traffic_penalty", "turn_penalty",
     "gradient_penalty", "total_ascent_m", "node_count",
@@ -56,7 +56,14 @@ def run_one(binary, pbf, node, args, out_json):
         cmd += ["--elevation", args.elevation]
     if args.weight_gradient is not None:
         cmd += ["--weight_gradient", str(args.weight_gradient)]
-    proc = subprocess.run(cmd, capture_output=True, text=True)
+    cmd += ["--threads", str(args.threads), "--engine", args.engine]
+    if os.path.exists(out_json):
+        os.unlink(out_json)  # Never report a stale result after a failed run.
+    try:
+        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=args.timeout)
+    except subprocess.TimeoutExpired:
+        print(f"Timed out at start node {node}", file=sys.stderr)
+        return {"start_node": node, "success": False, "within_tolerance": False}
     if proc.returncode != 0 and not os.path.exists(out_json):
         return {"start_node": node, "success": False}
     try:
@@ -69,6 +76,7 @@ def run_one(binary, pbf, node, args, out_json):
     return {
         "start_node": node,
         "success": run.get("success", False),
+        "within_tolerance": run.get("within_tolerance", False),
         "wall_time_ms": run.get("wall_time_ms", 0.0),
         "total_distance_m": stats.get("total_distance_m", 0.0),
         "distance_error_m": run.get("distance_error_m", 0.0),
@@ -103,6 +111,7 @@ def summarize(rows):
     return {
         "n": n,
         "fail_rate_pct": fail_rate,
+        "within_tolerance_pct": 100.0 * sum(bool(r.get("within_tolerance")) for r in ok) / n if n else 0.0,
         "mean_wall_ms": statistics.mean(wt) if wt else 0.0,
         "mean_dist_err_m": statistics.mean(derr) if derr else 0.0,
         "median_dist_err_m": statistics.median(derr) if derr else 0.0,
@@ -116,6 +125,7 @@ def print_summary(s, label=""):
     print(f"\n=== Summary {label} ===")
     print(f"  nodes evaluated : {s['n']}")
     print(f"  fail-rate       : {s['fail_rate_pct']:.1f}%")
+    print(f"  within tolerance: {s['within_tolerance_pct']:.1f}% of all starts")
     print(f"  mean wall time  : {s['mean_wall_ms']:.1f} ms")
     print(f"  dist error      : mean {s['mean_dist_err_m']:.0f}m  "
           f"median {s['median_dist_err_m']:.0f}m  p90 {s['p90_dist_err_m']:.0f}m")
@@ -138,8 +148,8 @@ def read_csv(path):
     for r in rows:
         for k in FIELDS:
             if k in ("start_node", "node_count"):
-                r[k] = int(float(r[k])) if r.get(k) not in ("", None) else 0
-            elif k == "success":
+                r[k] = int(r[k]) if r.get(k) not in ("", None) else 0
+            elif k in ("success", "within_tolerance"):
                 r[k] = str(r[k]).lower() in ("true", "1")
             else:
                 r[k] = float(r[k]) if r.get(k) not in ("", None) else 0.0
@@ -164,6 +174,7 @@ def compare(baseline_csv, compare_csv):
 
     print("\n=== Delta (compare vs baseline) ===")
     delta("fail_rate_pct")
+    delta("within_tolerance_pct", lower_better=False)
     delta("mean_wall_ms")
     delta("mean_dist_err_m")
     delta("p90_dist_err_m")
@@ -181,6 +192,9 @@ def main():
     ap.add_argument("--distance", type=float, default=5000)
     ap.add_argument("--iterations", type=int, default=100)
     ap.add_argument("--profile", default="scenic")
+    ap.add_argument("--threads", type=int, default=0)
+    ap.add_argument("--engine", choices=["hybrid", "greedy"], default="hybrid")
+    ap.add_argument("--timeout", type=float, default=120)
     ap.add_argument("--elevation", help="elevation sidecar (tools/build_elevation.py)")
     ap.add_argument("--weight_gradient", type=float, default=None,
                     help="hill-avoidance weight [0-1] passed to the engine")

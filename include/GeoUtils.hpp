@@ -2,12 +2,14 @@
 #define GEOUTILS_HPP
 
 #include <cmath>
+#include <algorithm>
 
 namespace GeoUtils {
+inline constexpr double pi = 3.14159265358979323846;
 
 inline double distance(double lat1, double lon1, double lat2, double lon2) {
     constexpr double R = 111319.5;
-    double dx = (lon1 - lon2) * std::cos((lat1 + lat2) * M_PI / 360.0);
+    double dx = (lon1 - lon2) * std::cos((lat1 + lat2) * pi / 360.0);
     double dy = lat1 - lat2;
     return std::sqrt(dx * dx + dy * dy) * R;
 }
@@ -31,7 +33,7 @@ inline double turnAngle(double lat1, double lon1,
     double dot = v1x * v2x + v1y * v2y;
     dot = std::max(-1.0, std::min(1.0, dot));
 
-    return std::acos(dot) * 180.0 / M_PI;
+    return std::acos(dot) * 180.0 / pi;
 }
 
 // Convert air distance offset to lat/lon deltas
@@ -39,7 +41,7 @@ inline void offsetToLatLon(double start_lat, double distance_m, double angle_rad
                            double& dlat, double& dlon) {
     constexpr double R = 111319.5;
     dlat = (distance_m * std::cos(angle_rad)) / R;
-    dlon = (distance_m * std::sin(angle_rad)) / (R * std::cos(start_lat * M_PI / 180.0));
+    dlon = (distance_m * std::sin(angle_rad)) / (R * std::cos(start_lat * pi / 180.0));
 }
 
 }

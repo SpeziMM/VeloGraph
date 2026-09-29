@@ -1,4 +1,5 @@
 #include "Graph.hpp"
+#include "GeoUtils.hpp"
 #include <cmath>
 #include <algorithm>
 #include <limits>
@@ -13,7 +14,7 @@ void Graph::addNode(const Node& n) {
     index_built = false; // Invalidate index
 }
 
-void Graph::addEdge(long from_id, long to_id, HighwayClass hw_class, 
+void Graph::addEdge(NodeId from_id, NodeId to_id, HighwayClass hw_class,
                     SurfaceQuality surface, bool is_lit, bool is_oneway) {
     // Calculate weight (distance) between nodes
     const Node* from = getNode(from_id);
@@ -34,7 +35,7 @@ void Graph::addEdge(long from_id, long to_id, HighwayClass hw_class,
     }
 }
 
-void Graph::buildFrom(const std::unordered_map<long, Node>& source_nodes,
+void Graph::buildFrom(const std::unordered_map<NodeId, Node>& source_nodes,
                       const std::vector<EdgeInput>& edges) {
     nodes = source_nodes;
     adjacency_list.clear();
@@ -53,8 +54,8 @@ void Graph::buildFrom(const std::unordered_map<long, Node>& source_nodes,
     const size_t target_per_thread = 100000;
     const size_t thread_count = std::max<size_t>(1, std::min<size_t>(hw_threads, (edge_count + target_per_thread - 1) / target_per_thread));
 
-    using AdjMap = std::unordered_map<long, std::vector<Edge>>;
-    using IncomingMap = std::unordered_map<long, std::vector<std::pair<long, Edge>>>;
+    using AdjMap = std::unordered_map<NodeId, std::vector<Edge>>;
+    using IncomingMap = std::unordered_map<NodeId, std::vector<std::pair<NodeId, Edge>>>;
 
     std::vector<AdjMap> local_adj(thread_count);
     std::vector<IncomingMap> local_incoming(thread_count);
@@ -111,12 +112,12 @@ void Graph::buildFrom(const std::unordered_map<long, Node>& source_nodes,
     }
 }
 
-const Graph::Node* Graph::getNode(long id) const {
+const Graph::Node* Graph::getNode(NodeId id) const {
     auto it = nodes.find(id);
     return (it != nodes.end()) ? &it->second : nullptr;
 }
 
-const std::vector<Graph::Edge>* Graph::getEdges(long node_id) const {
+const std::vector<Graph::Edge>* Graph::getEdges(NodeId node_id) const {
     auto it = adjacency_list.find(node_id);
     return (it != adjacency_list.end()) ? &it->second : nullptr;
 }
@@ -136,7 +137,7 @@ double Graph::calculateDistance(const Node& from, const Node& to) const {
 
 double Graph::calculateDistance(double lat1, double lon1, double lat2, double lon2) const {
     constexpr double R = 6371000.0; // Earth radius in meters
-    constexpr double DEG_TO_RAD = M_PI / 180.0;
+    constexpr double DEG_TO_RAD = GeoUtils::pi / 180.0;
 
     // Optimization: Use Equirectangular approximation for short distances (< ~11km)
     if (std::abs(lat1 - lat2) < 0.1 && std::abs(lon1 - lon2) < 0.1) {
@@ -188,7 +189,7 @@ void Graph::buildKDTree(size_t start, size_t end, int depth) {
     size_t mid = start + (end - start) / 2;
     int axis = depth % 2; // 0 for lat, 1 for lon
 
-    auto comparator = [this, axis](long id_a, long id_b) {
+    auto comparator = [this, axis](NodeId id_a, NodeId id_b) {
         const auto& node_a = nodes.at(id_a);
         const auto& node_b = nodes.at(id_b);
         return (axis == 0) ? (node_a.lat < node_b.lat) : (node_a.lon < node_b.lon);
@@ -206,7 +207,7 @@ void Graph::buildKDTree(size_t start, size_t end, int depth) {
 const Graph::Node* Graph::findClosestNode(double lat, double lon) const {
     if (spatial_index.empty()) return nullptr;
     
-    long best_node = -1;
+    NodeId best_node = -1;
     double min_dist = std::numeric_limits<double>::max();
     
     findNearestNeighbor(0, spatial_index.size(), 0, lat, lon, best_node, min_dist);
@@ -214,11 +215,11 @@ const Graph::Node* Graph::findClosestNode(double lat, double lon) const {
     return (best_node != -1) ? getNode(best_node) : nullptr;
 }
 
-void Graph::findNearestNeighbor(size_t start, size_t end, int depth, double lat, double lon, long& best_node, double& min_dist) const {
+void Graph::findNearestNeighbor(size_t start, size_t end, int depth, double lat, double lon, NodeId& best_node, double& min_dist) const {
     if (start >= end) return;
 
     size_t mid = start + (end - start) / 2;
-    long current_id = spatial_index[mid];
+    NodeId current_id = spatial_index[mid];
     const auto& current_node = nodes.at(current_id);
 
     double d = calculateDistance(lat, lon, current_node.lat, current_node.lon);
@@ -248,7 +249,7 @@ void Graph::findNearestNeighbor(size_t start, size_t end, int depth, double lat,
     // Calculate distance to the splitting plane
     double plane_dist_meters;
     constexpr double R = 6371000.0;
-    constexpr double DEG_TO_RAD = M_PI / 180.0;
+    constexpr double DEG_TO_RAD = GeoUtils::pi / 180.0;
     
     if (axis == 0) { // Latitude split
         plane_dist_meters = std::abs(diff) * DEG_TO_RAD * R;
@@ -262,8 +263,8 @@ void Graph::findNearestNeighbor(size_t start, size_t end, int depth, double lat,
     }
 }
 
-std::vector<long> Graph::findNodesInRadius(double lat, double lon, double radius_meters) const {
-    std::vector<long> results;
+std::vector<NodeId> Graph::findNodesInRadius(double lat, double lon, double radius_meters) const {
+    std::vector<NodeId> results;
     if (spatial_index.empty()) return results;
     findNodesInRange(0, spatial_index.size(), 0, lat, lon, radius_meters, results);
     return results;
@@ -271,11 +272,11 @@ std::vector<long> Graph::findNodesInRadius(double lat, double lon, double radius
 
 void Graph::findNodesInRange(size_t start, size_t end, int depth,
                              double lat, double lon, double radius_meters,
-                             std::vector<long>& results) const {
+                             std::vector<NodeId>& results) const {
     if (start >= end) return;
 
     size_t mid = start + (end - start) / 2;
-    long current_id = spatial_index[mid];
+    NodeId current_id = spatial_index[mid];
     const auto& current_node = nodes.at(current_id);
 
     double d = calculateDistance(lat, lon, current_node.lat, current_node.lon);
@@ -287,7 +288,7 @@ void Graph::findNodesInRange(size_t start, size_t end, int depth,
     double diff = (axis == 0) ? (lat - current_node.lat) : (lon - current_node.lon);
 
     constexpr double R = 6371000.0;
-    constexpr double DEG_TO_RAD = M_PI / 180.0;
+    constexpr double DEG_TO_RAD = GeoUtils::pi / 180.0;
     double plane_dist_meters;
     if (axis == 0) {
         plane_dist_meters = std::abs(diff) * DEG_TO_RAD * R;
@@ -309,24 +310,10 @@ void Graph::findNodesInRange(size_t start, size_t end, int depth,
     }
 }
 
-std::vector<std::pair<long, Graph::Edge>> Graph::getIncomingEdges(long node_id) const {
-    auto it = incoming_adjacency_list.find(node_id);
-    if (it != incoming_adjacency_list.end()) {
-        std::vector<std::pair<long, Edge>> result;
-        result.reserve(it->second.size());
-        
-        for (const auto& pair : it->second) {
-            long from_id = pair.first;
-            Edge original_edge = pair.second;
-            
-            // Create reverse edge pointing back to from_id
-            Edge reverse_edge = original_edge;
-            reverse_edge.to_node_id = from_id;
-            result.emplace_back(from_id, reverse_edge);
-        }
-        return result;
-    }
-    return {};
+const std::vector<std::pair<NodeId, Graph::Edge>>& Graph::getIncomingEdges(NodeId node_id) const {
+    static const std::vector<std::pair<NodeId, Edge>> empty;
+    const auto it = incoming_adjacency_list.find(node_id);
+    return it == incoming_adjacency_list.end() ? empty : it->second;
 }
 
 void Graph::rebuildIncomingFromAdjacency() {
@@ -401,7 +388,7 @@ bool Graph::deserialize(std::istream& in) {
     }
 
     for (uint64_t i = 0; i < adj_count; ++i) {
-        long from_id = 0;
+        NodeId from_id = 0;
         uint64_t edge_count = 0;
         in.read(reinterpret_cast<char*>(&from_id), sizeof(from_id));
         in.read(reinterpret_cast<char*>(&edge_count), sizeof(edge_count));
@@ -438,7 +425,7 @@ bool Graph::deserialize(std::istream& in) {
     return true;
 }
 
-long Graph::loadElevation(const std::string& path) {
+std::int64_t Graph::loadElevation(const std::string& path) {
     std::ifstream in(path, std::ios::binary);
     if (!in) return -1;
 
@@ -453,7 +440,7 @@ long Graph::loadElevation(const std::string& path) {
     }
 
     // Read id -> elevation pairs into a lookup, then apply to nodes we actually have.
-    std::unordered_map<long, float> elev;
+    std::unordered_map<NodeId, float> elev;
     elev.reserve(count);
     for (uint64_t i = 0; i < count; ++i) {
         int64_t id = 0;
@@ -461,10 +448,10 @@ long Graph::loadElevation(const std::string& path) {
         in.read(reinterpret_cast<char*>(&id), sizeof(id));
         in.read(reinterpret_cast<char*>(&e), sizeof(e));
         if (!in) break;
-        elev[static_cast<long>(id)] = e;
+        elev[static_cast<NodeId>(id)] = e;
     }
 
-    long matched = 0;
+    std::int64_t matched = 0;
     for (auto& [id, node] : nodes) {
         auto it = elev.find(id);
         if (it != elev.end()) {
@@ -475,7 +462,7 @@ long Graph::loadElevation(const std::string& path) {
 
     // Compute signed grade per edge (rise/run). evaluateEdge uses |grade|, so the same
     // magnitude on the incoming-edge copies is correct for reverse traversal.
-    auto grade_of = [&](long from_id, const Edge& e) -> float {
+    auto grade_of = [&](NodeId from_id, const Edge& e) -> float {
         const auto fit = nodes.find(from_id);
         const auto tit = nodes.find(e.to_node_id);
         if (fit == nodes.end() || tit == nodes.end() || e.weight <= 0.0) return 0.0f;
@@ -493,16 +480,16 @@ long Graph::loadElevation(const std::string& path) {
 
 void Graph::simplifyGraph() {
     struct SimplifyAction {
-        long mid_id;
-        long n1_id;
-        long n2_id;
+        NodeId mid_id;
+        NodeId n1_id;
+        NodeId n2_id;
         size_t n1_edge_index;
         size_t n2_edge_index;
         double w_mid_to_n2;
         double w_mid_to_n1;
     };
 
-    std::vector<long> node_ids;
+    std::vector<NodeId> node_ids;
     node_ids.reserve(nodes.size());
     for (const auto& pair : nodes) {
         node_ids.push_back(pair.first);
@@ -511,7 +498,7 @@ void Graph::simplifyGraph() {
     std::vector<SimplifyAction> actions;
     actions.reserve(node_ids.size() / 8);
 
-    for (long node_id : node_ids) {
+    for (NodeId node_id : node_ids) {
         auto out_edges_it = adjacency_list.find(node_id);
         auto in_edges_it = incoming_adjacency_list.find(node_id);
 
@@ -526,10 +513,10 @@ void Graph::simplifyGraph() {
         const auto& out_edges = out_edges_it->second;
         const auto& in_edges = in_edges_it->second;
 
-        long neighbor1_id = in_edges[0].first;
-        long neighbor2_id = in_edges[1].first;
-        long out_neighbor1_id = out_edges[0].to_node_id;
-        long out_neighbor2_id = out_edges[1].to_node_id;
+        NodeId neighbor1_id = in_edges[0].first;
+        NodeId neighbor2_id = in_edges[1].first;
+        NodeId out_neighbor1_id = out_edges[0].to_node_id;
+        NodeId out_neighbor2_id = out_edges[1].to_node_id;
 
         if (!((neighbor1_id == out_neighbor1_id && neighbor2_id == out_neighbor2_id) ||
               (neighbor1_id == out_neighbor2_id && neighbor2_id == out_neighbor1_id))) {
@@ -598,7 +585,7 @@ void Graph::simplifyGraph() {
         return;
     }
 
-    std::unordered_set<long> to_remove;
+    std::unordered_set<NodeId> to_remove;
     to_remove.reserve(actions.size());
     int simplified_count = 0;
 
@@ -655,7 +642,7 @@ void Graph::simplifyGraph() {
         simplified_count++;
     }
 
-    for (long id : to_remove) {
+    for (NodeId id : to_remove) {
         nodes.erase(id);
         adjacency_list.erase(id);
         incoming_adjacency_list.erase(id);

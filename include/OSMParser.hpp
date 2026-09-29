@@ -19,7 +19,7 @@ public:
     // Handler class for processing OSM data efficiently
     class GraphHandler : public osmium::handler::Handler {
     public:
-        std::unordered_map<long, Graph::Node> nodes;
+        std::unordered_map<NodeId, Graph::Node> nodes;
         std::vector<Graph::EdgeInput> edges;
         size_t nodes_processed = 0;
         size_t ways_processed = 0;
@@ -106,10 +106,10 @@ public:
                 const auto& node_ref = node_list[i];
                 const auto location = node_ref.location();
                 if (location.valid()) {
-                    const auto id = static_cast<long>(node_ref.ref());
+                    const auto id = static_cast<NodeId>(node_ref.ref());
                     const auto [_, inserted] = nodes.try_emplace(
                         id,
-                        Graph::Node{static_cast<long>(id), location.lat(), location.lon(), 0}
+                        Graph::Node{static_cast<NodeId>(id), location.lat(), location.lon(), 0}
                     );
                     if (inserted) {
                         nodes_processed++;
@@ -117,9 +117,9 @@ public:
                 }
             }
             
-            for (size_t i = 0; i < node_list.size() - 1; ++i) {
-                long from = static_cast<long>(node_list[i].ref());
-                long to = static_cast<long>(node_list[i + 1].ref());
+            for (size_t i = 0; i + 1 < node_list.size(); ++i) {
+                NodeId from = static_cast<NodeId>(node_list[i].ref());
+                NodeId to = static_cast<NodeId>(node_list[i + 1].ref());
                 
                 edges.push_back({from, to, hw_class, surf_quality, is_lit, is_oneway});
                 

@@ -7,7 +7,7 @@
 
 WaypointGenerator::WaypointTemplate WaypointGenerator::generate(
         const Graph& graph,
-        long start_node,
+        NodeId start_node,
         double target_distance,
         const PrecomputeResult& precompute,
         std::mt19937& rng) {
@@ -16,12 +16,12 @@ WaypointGenerator::WaypointTemplate WaypointGenerator::generate(
     if (!start) return {};
 
     constexpr double ROAD_FACTOR = 1.3;
-    double R = target_distance / (2.0 * M_PI * ROAD_FACTOR);
+    double R = target_distance / (2.0 * GeoUtils::pi * ROAD_FACTOR);
 
     std::uniform_int_distribution<int> n_dist(4, 6);
     int N = n_dist(rng);
 
-    std::uniform_real_distribution<double> angle_dist(0.0, 2.0 * M_PI);
+    std::uniform_real_distribution<double> angle_dist(0.0, 2.0 * GeoUtils::pi);
     double base_angle = angle_dist(rng);
 
     std::uniform_real_distribution<double> ecc_dist(0.7, 1.0);
@@ -34,7 +34,7 @@ WaypointGenerator::WaypointTemplate WaypointGenerator::generate(
     WaypointTemplate templ;
 
     for (int i = 0; i < N; ++i) {
-        double angle = base_angle + (2.0 * M_PI * i) / N;
+        double angle = base_angle + (2.0 * GeoUtils::pi * i) / N;
 
         double r = R * jitter(rng);
         double rx = r;
@@ -70,7 +70,7 @@ WaypointGenerator::WaypointTemplate WaypointGenerator::generate(
     // and distinct ideal positions can collapse onto the same graph node.
     // Deduplicate, then sort by bearing from the start so the route traverses
     // them in a consistent rotational order (no self-crossing segments).
-    std::unordered_set<long> seen;
+    std::unordered_set<NodeId> seen;
     std::vector<Waypoint> unique_wps;
     for (const auto& wp : templ.waypoints) {
         if (seen.insert(wp.node_id).second) {

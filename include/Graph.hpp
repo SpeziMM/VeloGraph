@@ -5,6 +5,10 @@
 #include <unordered_map>
 #include <cmath>
 #include <iosfwd>
+#include <string>
+#include <cstdint>
+
+using NodeId = std::int64_t;
 
 // Using Adjacency List for O(1) traversal average case
 // and O(V + E) space complexity.
@@ -38,7 +42,7 @@ public:
     };
 
     struct Node {
-        long id;
+        NodeId id;
         double lat;
         double lon;
         // Optimization: Use bit-packing for flags (traffic, surface type)
@@ -47,7 +51,7 @@ public:
     };
 
     struct Edge {
-        long to_node_id;
+        NodeId to_node_id;
         double weight;              // Distance in meters
         HighwayClass highway_class; // Road type for traffic estimation
         SurfaceQuality surface;     // Surface quality
@@ -57,8 +61,8 @@ public:
     };
 
     struct EdgeInput {
-        long from_id;
-        long to_id;
+        NodeId from_id;
+        NodeId to_id;
         HighwayClass highway_class;
         SurfaceQuality surface;
         bool is_lit;
@@ -66,17 +70,17 @@ public:
     };
 
 private:
-    std::unordered_map<long, Node> nodes;
-    std::unordered_map<long, std::vector<Edge>> adjacency_list;
-    std::unordered_map<long, std::vector<std::pair<long, Edge>>> incoming_adjacency_list; // to_id -> list of (from_id, edge)
+    std::unordered_map<NodeId, Node> nodes;
+    std::unordered_map<NodeId, std::vector<Edge>> adjacency_list;
+    std::unordered_map<NodeId, std::vector<std::pair<NodeId, Edge>>> incoming_adjacency_list; // to_id -> list of (from_id, edge)
     
     // Spatial Index (K-D Tree)
-    std::vector<long> spatial_index; // Stores node IDs
+    std::vector<NodeId> spatial_index; // Stores node IDs
     bool index_built = false;
 
     void buildKDTree(size_t start, size_t end, int depth);
-    void findNearestNeighbor(size_t start, size_t end, int depth, double lat, double lon, long& best_node, double& min_dist) const;
-    void findNodesInRange(size_t start, size_t end, int depth, double lat, double lon, double radius_meters, std::vector<long>& results) const;
+    void findNearestNeighbor(size_t start, size_t end, int depth, double lat, double lon, NodeId& best_node, double& min_dist) const;
+    void findNodesInRange(size_t start, size_t end, int depth, double lat, double lon, double radius_meters, std::vector<NodeId>& results) const;
 
     // Calculate Haversine distance between two nodes (in meters)
     double calculateDistance(const Node& from, const Node& to) const;
@@ -84,24 +88,25 @@ private:
 
 public:
     void addNode(const Node& n);
-    void addEdge(long from_id, long to_id, HighwayClass hw_class = HighwayClass::Unknown, 
+    void addEdge(NodeId from_id, NodeId to_id, HighwayClass hw_class = HighwayClass::Unknown,
                  SurfaceQuality surface = SurfaceQuality::Unknown, 
                  bool is_lit = false, bool is_oneway = false);
-    void buildFrom(const std::unordered_map<long, Node>& source_nodes,
+    void buildFrom(const std::unordered_map<NodeId, Node>& source_nodes,
                    const std::vector<EdgeInput>& edges);
     
     // Spatial queries
     void buildSpatialIndex();
     const Node* findClosestNode(double lat, double lon) const;
-    std::vector<long> findNodesInRadius(double lat, double lon, double radius_meters) const;
+    std::vector<NodeId> findNodesInRadius(double lat, double lon, double radius_meters) const;
     
     // Getters
-    const std::unordered_map<long, std::vector<Edge>>& getAdjacencyList() const { return adjacency_list; }
-    const Node* getNode(long id) const;
-    const std::vector<Edge>* getEdges(long node_id) const;
+    const std::unordered_map<NodeId, std::vector<Edge>>& getAdjacencyList() const { return adjacency_list; }
+    const Node* getNode(NodeId id) const;
+    const std::vector<Edge>* getEdges(NodeId node_id) const;
     
     // Get all nodes that have edges TO this node (for reverse traversal)
-    std::vector<std::pair<long, Edge>> getIncomingEdges(long node_id) const;
+    // Borrowed view, valid until the graph is mutated. Edge retains its forward destination.
+    const std::vector<std::pair<NodeId, Edge>>& getIncomingEdges(NodeId node_id) const;
     
     // Simplify graph by merging degree-2 nodes with compatible edges
     void simplifyGraph();
@@ -113,7 +118,7 @@ public:
     // Load per-node elevation from a sidecar produced by tools/build_elevation.py and
     // compute each edge's signed grade. Runtime overlay — not part of the graph cache.
     // Returns the number of nodes matched, or -1 on read error.
-    long loadElevation(const std::string& path);
+    std::int64_t loadElevation(const std::string& path);
 
     size_t nodeCount() const { return nodes.size(); }
     size_t edgeCount() const;

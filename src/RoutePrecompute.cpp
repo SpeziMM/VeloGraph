@@ -19,16 +19,16 @@ bool RoutePrecompute::isCyclingEdge(const Graph::Edge& edge, bool relaxed) {
     }
 }
 
-std::unordered_map<long, double> RoutePrecompute::dijkstraFromStart(
-        const Graph& graph, long start_node, double max_graph_distance) {
+std::unordered_map<NodeId, double> RoutePrecompute::dijkstraFromStart(
+        const Graph& graph, NodeId start_node, double max_graph_distance) {
 
     struct DNode {
-        long id;
+        NodeId id;
         double dist;
         bool operator>(const DNode& o) const { return dist > o.dist; }
     };
 
-    std::unordered_map<long, double> dist;
+    std::unordered_map<NodeId, double> dist;
     std::priority_queue<DNode, std::vector<DNode>, std::greater<DNode>> pq;
 
     dist[start_node] = 0.0;
@@ -42,7 +42,7 @@ std::unordered_map<long, double> RoutePrecompute::dijkstraFromStart(
         if (d > max_graph_distance) continue;
 
         // Traverse reverse graph: incoming edges give us nodes that CAN reach node_id
-        auto incoming = graph.getIncomingEdges(node_id);
+        const auto& incoming = graph.getIncomingEdges(node_id);
         for (const auto& [from_id, edge] : incoming) {
             if (!isCyclingEdge(edge, true)) continue;
 
@@ -60,20 +60,20 @@ std::unordered_map<long, double> RoutePrecompute::dijkstraFromStart(
     return dist;
 }
 
-std::unordered_set<long> RoutePrecompute::extractSubgraph(
-        const Graph& graph, long start_node, double air_radius) {
+std::unordered_set<NodeId> RoutePrecompute::extractSubgraph(
+        const Graph& graph, NodeId start_node, double air_radius) {
 
     const auto* start = graph.getNode(start_node);
     if (!start) return {};
 
     auto node_ids = graph.findNodesInRadius(start->lat, start->lon, air_radius);
 
-    std::unordered_set<long> result(node_ids.begin(), node_ids.end());
+    std::unordered_set<NodeId> result(node_ids.begin(), node_ids.end());
     result.insert(start_node);
 
     if (result.size() < 100) {
         node_ids = graph.findNodesInRadius(start->lat, start->lon, air_radius * 2.0);
-        result = std::unordered_set<long>(node_ids.begin(), node_ids.end());
+        result = std::unordered_set<NodeId>(node_ids.begin(), node_ids.end());
         result.insert(start_node);
     }
 
@@ -82,10 +82,10 @@ std::unordered_set<long> RoutePrecompute::extractSubgraph(
 
 void RoutePrecompute::markDeadEnds(
         const Graph& graph,
-        const std::unordered_set<long>& subgraph_nodes,
-        std::unordered_set<long>& dead_end_nodes) {
+        const std::unordered_set<NodeId>& subgraph_nodes,
+        std::unordered_set<NodeId>& dead_end_nodes) {
 
-    for (long node_id : subgraph_nodes) {
+    for (NodeId node_id : subgraph_nodes) {
         const auto* edges = graph.getEdges(node_id);
         if (!edges) {
             dead_end_nodes.insert(node_id);
@@ -106,7 +106,7 @@ void RoutePrecompute::markDeadEnds(
 }
 
 PrecomputeResult RoutePrecompute::precompute(
-        const Graph& graph, long start_node, double target_distance) {
+        const Graph& graph, NodeId start_node, double target_distance) {
 
     auto t0 = std::chrono::high_resolution_clock::now();
 

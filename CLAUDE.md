@@ -7,7 +7,9 @@ Unlike A-to-B routing, VeloGraph solves the **constrained cycle finding problem*
 
 ```bash
 # Build (requires libosmium, zlib, bzip2, expat)
-cd build && cmake .. && make -j$(sysctl -n hw.ncpu)
+cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+cmake --build build --parallel
+ctest --test-dir build --output-on-failure
 
 # Run — requires a .osm.pbf file and a start node ID
 ./build/VeloGraph data/karlsruhe_small.osm.pbf \
@@ -57,7 +59,7 @@ OSMParser (libosmium)  →  Graph (adjacency list + KD-tree)  →  RouteFinder  
 |------|---------|
 | `include/OSMParser.hpp`, `src/OSMParser.cpp` | Parses .osm.pbf via libosmium, extracts highway/surface/lit tags, builds edges. Caches parsed graphs to `output/graph_cache_*.bin`. |
 | `include/Graph.hpp`, `src/Graph.cpp` | Adjacency list graph with KD-tree spatial index, Haversine distance, graph simplification (merge degree-2 nodes), binary serialization. `loadElevation()` applies a runtime elevation overlay (node elevation + edge grade). |
-| `include/RouteFinder.hpp`, `src/RouteFinder.cpp` | Hybrid waypoint cycle-finder. Runs independent iterations in **parallel** (work-stealing pool; per-iteration RNG `seed_seq{base_seed, i}` ⇒ deterministic regardless of thread count) and reduces to the best. |
+| `include/RouteFinder.hpp`, `src/RouteFinder.cpp` | Hybrid waypoint cycle-finder. Runs independent iterations in **parallel** (atomic iteration queue; per-iteration RNG `seed_seq{base_seed, i}` ⇒ deterministic regardless of thread count) and reduces to the best. |
 | `include/RouteEvaluator.hpp`, `src/RouteEvaluator.cpp` | Weighted fitness scoring: safety (lit), scenery (low-traffic), surface quality, traffic, turns, and **gradient** (`weight_gradient`, default 0). Reports total ascent. User profiles. |
 | `src/main.cpp` | CLI entry point, argument parsing, timed run, JSON export (route + `run` metadata + score breakdown). |
 | `tools/route_map.py` | Leaflet + OSM-tile route visualizer (reads route JSON). |
@@ -68,7 +70,7 @@ OSMParser (libosmium)  →  Graph (adjacency list + KD-tree)  →  RouteFinder  
 
 ## Algorithm overview (RouteFinder)
 
-The engine is a **hybrid waypoint router**. `findOptimalCycle` precomputes once, then runs N independent iterations **in parallel** (work-stealing pool) and reduces to the best by `0.6·fitness + 0.4·distance_accuracy`. Each iteration is deterministic for a given `--seed` (RNG = `seed_seq{base_seed, i}`), so the result is identical regardless of `--threads`.
+The engine is a **hybrid waypoint router**. `findOptimalCycle` precomputes once, then runs N independent iterations **in parallel** (atomic iteration queue) and prefers candidates within distance tolerance, then reduces by `0.6·fitness + 0.4·distance_accuracy`. Each iteration is deterministic for a given `--seed` (RNG = `seed_seq{base_seed, i}`), so the result is identical regardless of `--threads`.
 
 Per iteration (`runIteration`):
 
@@ -89,7 +91,7 @@ Fitness (`RouteEvaluator`) weights safety (lit), scenery (low-traffic), surface 
 ## Dependencies
 
 - **C++17** compiler (GCC/Clang)
-- **CMake** 3.10+
+- **CMake** 3.18+
 - **libosmium** (osmium headers + protozero)
 - **zlib**, **bzip2**, **expat** (for PBF decompression)
 - **Python 3** (tooling only): `tools/route_map.py` (stdlib), `tools/eval_quality.py` (stdlib); `tools/build_elevation.py` needs `rasterio` only for real DEM sampling (`--synthetic` is stdlib-only)
@@ -100,5 +102,5 @@ On Ubuntu: `apt install libosmium2-dev libprotozero-dev libbz2-dev libexpat1-dev
 ## Code conventions
 
 - C++17, STL-only (no Boost). RAII, raw pointers for non-owning references.
-- Build flags: `-O3 -march=native` for release.
-- No test framework currently. Validation is done by running the engine on real PBF data and visualizing output.
+- Use standard CMake Release/Debug configurations. `VELOGRAPH_NATIVE=ON` opts into non-portable `-march=native`.
+- CTest covers directed connectivity, fixed-width IDs, thread determinism and invalid CLI inputs. See [the playbook](docs/AGENT_PLAYBOOK.md) and [quality report](docs/QUALITY_REPORT.md) for benchmark gates.

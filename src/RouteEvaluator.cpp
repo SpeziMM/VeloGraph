@@ -1,6 +1,7 @@
 #include "RouteEvaluator.hpp"
 #include <algorithm>
 #include <cmath>
+#include <stdexcept>
 
 // Predefined profiles
 RouteEvaluator::UserProfile RouteEvaluator::getProfileScenic() {
@@ -137,7 +138,7 @@ double RouteEvaluator::evaluateEdge(const Graph::Edge& edge,
 
 RouteEvaluator::RouteScore RouteEvaluator::evaluateRoute(
         const Graph& graph,
-        const std::vector<long>& path,
+        const std::vector<NodeId>& path,
         const UserProfile& profile) const {
 
     RouteScore result{};
@@ -152,10 +153,11 @@ RouteEvaluator::RouteScore RouteEvaluator::evaluateRoute(
 
     for (size_t i = 0; i < path.size() - 1; ++i) {
         const auto* edges = graph.getEdges(path[i]);
-        if (!edges) continue;
-
+        if (!edges) throw std::invalid_argument("Route contains a missing forward edge");
+        bool found = false;
         for (const auto& edge : *edges) {
             if (edge.to_node_id == path[i + 1]) {
+                found = true;
                 double dist = edge.weight;
                 result.total_distance += dist;
 
@@ -178,6 +180,7 @@ RouteEvaluator::RouteScore RouteEvaluator::evaluateRoute(
                 break;
             }
         }
+        if (!found) throw std::invalid_argument("Route contains a missing forward edge");
     }
 
     // Count sharp turns (> 45 degrees)

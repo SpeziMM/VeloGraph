@@ -54,7 +54,7 @@ public:
 
     // Evaluate a complete route
     RouteScore evaluateRoute(const Graph& graph, 
-                            const std::vector<long>& path,
+                            const std::vector<NodeId>& path,
                             const UserProfile& profile) const;
 
     // Evaluate a single edge (for incremental scoring)

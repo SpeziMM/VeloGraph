@@ -1,128 +1,64 @@
-VeloGraph: High-Performance Loop Generator (unfinished)
+# VeloGraph
 
-VeloGraph is a C++ based routing engine designed to generate circular running and cycling routes (loops) based on user constraints.
+C++17 cycling-loop generator using OpenStreetMap. Given a start and target length,
+it searches for a closed route scored for scenery, lighting, surface, traffic,
+turns and optional elevation. It is an experimental heuristic router.
 
-Unlike standard A-to-B routing (Dijkstra/A*), VeloGraph solves the constrained cycle finding problem, aiming to generate a route of length $L$ that begins and ends at a start node $S$, maximizing "fitness" heuristic (scenery, low traffic).
+The default **hybrid** engine creates ellipse waypoints, searches between them,
+falls back to a greedy walk when needed, and refines the result. Directed-edge
+validation prevents invented reverse connections. Quality takes priority over
+speed: candidates within distance tolerance rank ahead of best-effort loops.
 
-🚀 Engineering Goals & Complexity Interest
+## Build and test
 
-This project is a playground for low-level systems programming and algorithmic optimization.
+Requires CMake 3.18+, a C++17 compiler, libosmium, protozero, zlib, bzip2 and expat.
+Python 3 is optional for CLI tests and visualization; these tools use its standard
+library. Leaflet and map tiles require internet access in the browser.
 
-Memory Efficiency: * Parsing OpenStreetMap (OSM) data (often gigabytes in size) using custom stream processing to minimize RAM overhead.
-
-Implementing Compressed Sparse Row (CSR) or optimized Adjacency Lists to represent the graph, targeting minimal cache misses.
-
-Spatial Indexing: * Implementation of a Quadtree (or R-Tree) to perform spatial range queries (e.g., "Find all nodes within 5km") in $O(\log N)$ time.
-
-Heuristic Search: * Implementing a modified Depth-First Search (DFS) with pruning and randomized heuristics (Monte Carlo steps) to find cycles, as finding a perfect cycle of exact length is theoretically NP-Hard.
-
-🛠 Tech Stack
-
-Language: C++17 (Focus on RAII, smart pointers, and template metaprogramming)
-
-Build System: CMake
-
-Data Source: OpenStreetMap (XML/PBF)
-
-External Libs: (Planned) libosmium for PBF parsing, otherwise STL only.
-
-🏗 Architecture
-
-Parser Module: Streams OSM XML nodes/ways and filters irrelevant data (buildings, power lines) to construct a routing graph.
-
-Graph Core: Stores nodes (intersections) and edges (roads) with weighted costs (distance + elevation penalty).
-
-Spatial Index: Partitions the 2D map space to allow fast "Nearest Neighbor" lookups.
-
-Solver:
-
-Phase 1: Generate waypoints roughly forming a polygon (Triangle/Square) fitting the distance.
-
-Phase 2: Run A* pathfinding between waypoints.
-
-Phase 3: Optimize loop closure.
-
-⚡ Performance Benchmarks (Goals)
-
-Operation
-
-Target Time
-
-Graph Build (City Scale)
-
-< 500ms
-
-Route Generation (10km)
-
-< 50ms
-
-Spatial Query (Radius)
-
-< 1ms
-
-🏃‍♂️ Getting Started
-
-## Prerequisites
-
-**C++ Dependencies:**
-- C++ Compiler (GCC/Clang with C++17 support)
-- CMake (3.10+)
-- libosmium2-dev
-- libprotozero-dev
-- libbz2-dev
-- libexpat1-dev
-- zlib1g-dev
-
-**Python Dependencies (for visualization):**
-- python3
-- matplotlib
-- numpy
-
-## Installation
-
-```bash
-# Install dependencies (Ubuntu/Debian)
-sudo apt-get update
-sudo apt-get install -y libosmium2-dev libprotozero-dev libbz2-dev \
-    libexpat1-dev zlib1g-dev python3-matplotlib python3-numpy
-
-# Build the project
-mkdir build
-cd build
-cmake ..
-make
+```sh
+# Debian / Ubuntu
+sudo apt-get install cmake g++ libosmium2-dev libprotozero-dev libbz2-dev libexpat1-dev zlib1g-dev python3
+# macOS dependencies: brew install cmake libosmium protozero
+cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+cmake --build build --parallel
+ctest --test-dir build --output-on-failure
 ```
 
-## Usage
+`-DVELOGRAPH_NATIVE=ON` enables tuning for the build machine; it is off by default.
+For debugging, use `-DCMAKE_BUILD_TYPE=Debug -DVELOGRAPH_SANITIZERS=ON`.
 
-```bash
-# Parse OSM data (PBF or XML format)
-./build/VeloGraph data/map.osm.pbf
+## Generate and view a route
 
-# Visualize the generated path (Leaflet + OSM tiles)
-python3 tools/route_map.py output/sample_path.json output/route_map.html
+Download a regional `.osm.pbf` extract from [Geofabrik](https://download.geofabrik.de/)
+and put it in `data/`. Run from the repository root:
+
+```sh
+./build/VeloGraph data/map.osm.pbf --start 49.0 8.4 \
+  --target_distance 5000 --profile scenic --iterations 100 \
+  --seed 777 --threads 4 --engine hybrid --tolerance 0.1 \
+  --output_path output/route.json
+python3 tools/route_map.py output/route.json output/route.html
 ```
 
-## Features Implemented
+Use `--start_node ID` instead of coordinates for reproducible evaluations.
+`--engine greedy` retains the comparison algorithm. Other profiles are `safe-night`,
+`mountain-bike`, and `casual`. `--help` lists the complete interface.
 
-✅ **Efficient OSM PBF Parser**
-- Stream-based processing with libosmium
-- Filters highway tags for routing networks
-- Bidirectional and one-way road support
-- Sub-millisecond parsing for small datasets
+JSON includes the actual seed, engine, measured search time, score breakdown and
+`within_tolerance`. A valid loop outside tolerance is a labeled best effort;
+no route exits with code 2, input/runtime errors with code 1. Playback follows the
+final route, while the panel briefly explains the search pipeline.
 
-✅ **Graph Construction**
-- Adjacency list representation
-- Haversine distance calculation for edge weights
-- O(1) node lookups with unordered_map
+## Evidence and next changes
 
-✅ **Path Visualization**
-- Python script with matplotlib
-- Annotated paths with start/end markers
-- Export to PNG format
+- [Algorithm diagram and limitations](docs/ALGORITHM.md)
+- [Measured quality and performance report](docs/QUALITY_REPORT.md)
+- [Quality-first agent playbook](docs/AGENT_PLAYBOOK.md)
+- [Installed C++ skills and security review](docs/SKILL_REVIEW.md)
+- [Developer details and elevation tooling](CLAUDE.md)
 
-See [OSM_PARSER_README.md](OSM_PARSER_README.md) for detailed documentation.
-
-🗺 Data
-
-To test the engine, download an .osm.pbf extract from [Geofabrik](https://download.geofabrik.de/). Place it in the `/data` folder.
+On the recorded 63-case set, corrected hybrid returned 48 valid loops, compared
+with 37 for corrected greedy. On 60 held-out cases, it met the target tolerance in
+23 cases versus 15. This supports the current default for that workload, not a
+claim of universal optimality. Full OSM bicycle restrictions, richer geometry and
+broader datasets remain future work.

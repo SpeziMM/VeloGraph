@@ -30,3 +30,7 @@ parse_benchmark*.cpp
 /parse_build_only
 /get_first_node
 /inspect_graph
+
+# Python tooling caches
+__pycache__/
+*.py[cod]
