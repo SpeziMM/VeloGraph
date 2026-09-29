@@ -48,7 +48,8 @@ all repeats count for timing. All repeated paths/scores were identical. A separa
 validator checks closure, every forward edge, forbidden motorway/trunk classes and
 summed distance rather than trusting the router's success flag.
 
-The existing 21-start set gives 63 cases. Twenty additional starts sampled with
+The existing 21-start set was curated from earlier reported successes and gives
+63 cases; its rates are selection-biased. Twenty additional starts sampled with
 `inspect_graph --sample 20 2026` give 60 held-out cases; failures were not filtered
 out after sampling. Both sets come from one region and one target/profile, which
 limits generalization. Graph-valid does not mean all OSM access restrictions are
@@ -110,8 +111,9 @@ measurement affect CLI validation, visualization and reporting, not routing.
 
 Local Release CTest and Debug UBSan CTest passed (core and CLI). Apple ASan could
 not complete runtime initialization before main; a process sample showed an
-ASan initialization lock, so local ASan is **not passed**. Linux CI runs both
-Release and Debug with ASan+UBSan. Its result is recorded in the integration PR.
+ASan initialization lock, so local ASan is **not passed**. Linux CI passed both Release and Debug with ASan+UBSan for engine commit
+`9c1fab7` ([run](https://github.com/SpeziMM/VeloGraph/actions/runs/36566194892)).
+The integration PR retains checks for subsequent documentation-only revisions.
 
 Playback was checked for slider input, keyboard activation and completion at 100%.
 The map renders a final route (4.97 km in the demo), not internal search expansions.
