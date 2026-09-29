@@ -1,0 +1,117 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>VeloGraph · Inside the route engine</title>
+<link rel="stylesheet" href="report.css">
+<script defer src="data.js"></script><script defer src="report.js"></script>
+</head>
+<body>
+<a class="skip" href="#overview">Skip to report</a>
+<header><a class="brand" href="#overview">VeloGraph <span>/ engine notebook</span></a><span class="tag">C++17 · quality first</span></header>
+<div class="layout">
+<nav aria-label="Report sections">
+<p class="eyebrow">Explore the system</p>
+<a href="#overview">01 / At a glance</a><a href="#pipeline">02 / How a route is found</a>
+<a href="#inputs">03 / Inputs & start area</a><a href="#route">04 / Output points</a>
+<a href="#failures">05 / Where it fails</a><a href="#evidence">06 / Measured evidence</a>
+<a href="#hardware">07 / This Mac & parallelism</a><a href="#maintenance">08 / Structure & updates</a>
+<p class="nav-note">Teaching diagrams, real outputs and historical measurements are labeled separately.</p>
+<a href="../REPORT_REQUIREMENTS.md">Scope & decisions ↗</a>
+</nav>
+<main>
+<section id="overview">
+<p class="eyebrow">An inspectable guide to the current implementation</p>
+<h1>From a starting point<br>to a useful loop.</h1>
+<p class="lead">A hybrid search tries different waypoint loops, refines them and keeps the best graph-valid candidate. It is a bounded heuristic, not an optimal-route solver.</p>
+<div class="summary-grid">
+<a href="#pipeline"><strong>How it works</strong><span>Spatial queries → waypoints → search → refinement</span></a>
+<a href="#inputs"><strong>What you control</strong><span>Start point or area, distance, profile and search budget</span></a>
+<a href="#failures"><strong>What it cannot promise</strong><span>No result does not prove no suitable route exists</span></a>
+</div>
+<div class="callout"><strong>Current boundary</strong><p>Forward-edge consistency is checked. Full OSM bicycle restrictions and original road geometry are incomplete. Quality scores are proxies, not real-world safety guarantees.</p></div>
+<p class="small" id="provenance"></p>
+</section>
+<section id="pipeline">
+<div class="section-head"><p class="eyebrow">02 / The algorithm</p><h2>One pipeline, many attempts.</h2></div>
+<p>Choose a stage. The graph below is an <strong>illustrative teaching example</strong>, not a captured trace of the C++ engine.</p>
+<div id="stage-buttons" class="steps" role="group" aria-label="Algorithm stages"></div>
+<div class="split">
+<div class="visual"><svg id="pipeline-graph" viewBox="0 0 640 360" role="img" aria-label="Illustrative directed graph and selected routing stage"></svg><p id="graph-caption" class="small"></p></div>
+<article id="stage-detail" aria-live="polite"><p class="eyebrow" id="stage-number"></p><h3 id="stage-title"></h3><p id="stage-description"></p><dl><dt>Algorithm & data</dt><dd id="stage-data"></dd><dt>Why this can be efficient</dt><dd id="stage-efficiency"></dd><dt>Limit or trade-off</dt><dd id="stage-gap"></dd></dl><a id="stage-source">Read the implementation ↗</a></article>
+</div>
+<details><summary>How to read the complexity claims</summary><p>V = visited graph nodes, E = examined edges, k = route points, I = search attempts and W = workers. Expected hash lookups are O(1), not a worst-case guarantee. KD-tree range queries can degrade to O(V). The heap search has Dijkstra-like operations but weighted heuristics and separate distance budgets do not provide exact A* optimality.</p></details>
+</section>
+<section id="inputs">
+<p class="eyebrow">03 / Define a request</p><h2>Choose a point—or an area.</h2>
+<p>This builds a runnable CLI command. It does <strong>not</strong> execute routing in your browser. Area mode tries the nearest eligible starts up to a limit; it does not search every possible point.</p>
+<form id="request-form">
+<div class="form-grid">
+<label>Start mode<select id="start-mode"><option value="point">Coordinate → nearest node</option><option value="area">Center + search radius</option><option value="node">Exact OSM node ID</option></select></label>
+<label data-coordinate>Latitude<input id="latitude" type="number" min="-90" max="90" step="any" value="48.74823" required></label>
+<label data-coordinate>Longitude<input id="longitude" type="number" min="-180" max="180" step="any" value="8.60285" required></label>
+<label id="node-field" hidden>OSM node ID<input id="node-id" inputmode="numeric" maxlength="19" value="278302522" pattern="[0-9]+" required></label>
+<label id="snap-field">Max snap distance (m)<input id="snap" type="number" min="1" max="100000" value="250" required></label>
+<label id="radius-field" hidden>Start radius (m)<input id="radius" type="number" min="1" max="100000" value="500" required></label>
+<label id="candidates-field" hidden>Starts to try (maximum)<input id="candidates" type="number" min="1" max="64" value="8" required></label>
+<label>Target distance (m)<input id="distance" type="number" min="1" max="1000000" value="5000" required></label>
+<label>Distance tolerance (%)<input id="tolerance" type="number" min="0" max="100" step="1" value="10" required></label>
+<label>Profile<select id="profile"><option>scenic</option><option>safe-night</option><option>mountain-bike</option><option>casual</option></select></label>
+</div>
+<details><summary>Search budget, reproducibility & graph input</summary><div class="form-grid">
+<label>Iterations per start<input id="iterations" type="number" min="1" max="100000" value="100" required></label>
+<label>CPU threads (0 = auto)<input id="threads" type="number" min="0" max="256" value="4" required></label>
+<label>Seed (0 = random)<input id="seed" type="number" min="0" max="4294967295" value="777" required></label>
+<label>Engine<select id="engine"><option>hybrid</option><option>greedy</option></select></label>
+<label class="wide">OSM file path<input id="map-path" value="data/karlsruhe-regbez-251117.osm.pbf" required></label>
+</div></details>
+</form>
+<div class="split request-result"><div><p id="request-summary" aria-live="polite"></p><pre id="command" tabindex="0" aria-label="Generated routing command"></pre><button id="copy-command" type="button">Copy command</button><span id="copy-status" class="small" role="status"></span></div><div><svg id="start-diagram" viewBox="0 0 360 240" role="img" aria-label="Illustration of the selected start mode"></svg><p class="small">Schematic only. Nearby nodes and distances here are not OSM data.</p></div></div>
+<details><summary>All CLI inputs and the exact route contract</summary><ul id="cli-inputs"></ul><p>The selected graph node is both start and finish. A radius limits the <em>start</em>, not the whole route. The default coordinate snap limit is 250 m. Area mode sorts eligible nodes by approximate center distance then ID; eligibility only means an outgoing edge not classified motorway/trunk. Starts run sequentially; each start's attempts use CPU workers. Iterations are per start, so an area can cost up to candidates × iterations.</p><p>Distance tolerance is a ranking preference, not a hard guarantee. Within each tolerance group, selection uses 0.6 × fitness + 0.4 × distance accuracy. Repeated roads and out-and-back sections are possible. Surface, scenery and slope are preferences; arbitrary must-visit points, polygon starts and GPX export are not implemented.</p></details>
+</section>
+<section id="route">
+<p class="eyebrow">04 / Real output</p><h2>A route is an ordered list of points.</h2>
+<p>Inspect the checked-in engine output or load your own JSON locally. This view draws retained route points without map tiles; simplification may have removed bends between them.</p>
+<div class="controls"><label>Recorded example<select id="route-example"><option value="point">Fixed start · recorded route</option><option value="area">Start area · integration run</option></select></label><label>Load route JSON<input id="route-file" type="file" accept="application/json,.json"></label></div><p id="route-error" role="alert"></p>
+<div class="split"><div class="visual"><svg id="real-route" viewBox="0 0 640 390" role="img" aria-label="Recorded route geometry with selected point"></svg><p class="small">Route data © <a href="https://www.openstreetmap.org/copyright">OpenStreetMap contributors</a>. Geometry view; no basemap requests.</p></div><div><p id="route-summary"></p><output id="point-position" for="route-position"></output><label>Selected point<input id="route-position" type="range" min="0" max="1" value="0"></label><div class="controls"><button id="route-prev" type="button">Previous point</button><button id="route-next" type="button">Next point</button></div><pre id="point-json" tabindex="0"></pre><p id="route-meta" class="small"></p><details><summary>Output fields and limitations</summary><p><code>nodes</code> preserves traversal order, including repeated nodes and closure. Each point contains <code>id</code>, <code>lat</code>, <code>lon</code>. <code>stats</code> contains total graph distance, fitness and score components. <code>run</code> contains seed, success, tolerance status, timings and start-selection metadata. A failure emits an empty points array; it does not prove impossibility. Coordinates are rounded on export, and straight segments do not reconstruct discarded road geometry.</p></details></div></div>
+</section>
+<section id="failures">
+<p class="eyebrow">05 / Failure explorer</p><h2>“Not found” is an observation.</h2>
+<p>These are labeled scenarios, not an online feasibility detector. Select a case to see what the current engine can honestly conclude.</p>
+<label>Scenario<select id="failure-case"><option value="input">Invalid input or distant coordinate</option><option value="directed">One-way route has no return</option><option value="budget">Search budget misses a feasible route</option><option value="tolerance">A route exists, but misses target length</option><option value="area">Candidate limit misses a useful area start</option><option value="tags">Graph route disagrees with OSM restrictions</option><option value="geometry">Route line cuts across removed road bends</option></select></label>
+<article class="callout" aria-live="polite"><strong id="failure-title"></strong><p id="failure-explanation"></p><p id="failure-action"></p><a href="https://github.com/SpeziMM/VeloGraph/issues/5">Future feasibility work · issue #5 ↗</a></article>
+<details><summary>Which validation already exists?</summary><ul><li>Directed ring and one-way chain: closure and forward-edge validation.</li><li>Thread-count repeatability for fixed seeds; missing-edge scoring rejection.</li><li>64-bit node IDs, cache round-trip and malformed CLI arguments.</li><li>Start snapping bounds, area eligibility/caps/tie ordering, deterministic area routing and coordinate/node equivalence.</li><li>Report source freshness, generated evidence consistency and Linux sanitizer builds.</li></ul><p>These are focused regressions, not exhaustive correctness proofs. A future exact small-graph oracle and sound impossibility reasons are tracked in issue #5.</p></details>
+</section>
+<section id="evidence">
+<p class="eyebrow">06 / Existing benchmarks</p><h2>Quality before speed.</h2>
+<p>Historical Karlsruhe measurements: 5 km, scenic, 100 iterations, four CPU workers, three seeds and three timed repeats. Warm search time excludes graph loading. These measurements do not benchmark the new multi-start feature.</p>
+<div class="controls"><label>Start set<select id="benchmark-set"><option value="heldout">Held-out · 20 starts × 3 seeds</option><option value="curated">Curated · 21 starts × 3 seeds</option></select></label><label>Compare<select id="benchmark-metric"><option value="quality">Valid loops & target compliance</option><option value="time">Median and p90 search time</option></select></label></div>
+<div class="chart-scroll"><svg id="benchmark-chart" viewBox="0 0 800 270" role="img" aria-label="Recorded engine comparison"></svg></div>
+<div class="table-wrap"><table><caption>Measurements derived from archived CSV samples</caption><thead><tr><th>Engine</th><th>Cases</th><th>Valid</th><th>In tolerance</th><th>Fitness¹</th><th>Error¹ (m)</th><th>Median / p90 (ms)</th></tr></thead><tbody id="benchmark-table"></tbody></table></div>
+<p id="benchmark-note" class="small"></p><p class="small">¹ Means over valid routes only; engines return different subsets. Timing pools both successful and failed searches. Results cover one region/profile/distance, not universal optimality.</p>
+<details><summary>Before/after optimization, raw data and reproducibility</summary><p>The output-preserving 2-opt precheck comparison kept all 378 paths/scores equal. Hybrid median was 4.204 → 3.061 ms. The sequential run order and timing variation limit the strength of the speedup claim. The earlier router also reported invalid successes, so its overall before/after timing is not a pure optimization comparison.</p><p><a href="../QUALITY_REPORT.md">Full methodology</a> · <a href="../benchmarks/2026-09-29/heldout.csv">Held-out CSV</a> · <a href="../benchmarks/2026-09-29/precheck.csv">Curated CSV</a></p><pre>./build/quality/route_benchmark data/karlsruhe-regbez-251117.osm.pbf \
+  tools/eval_nodes_heldout.txt runs/current.csv 100 4 3
+python3 tools/summarize_benchmark.py runs/current.csv</pre></details>
+</section>
+<section id="hardware">
+<p class="eyebrow">07 / Parallel hardware</p><h2>CPU workers today. GPU is unmeasured.</h2>
+<p>The inspected Mac reports an Apple M5 Pro: <strong>15 CPU cores, 16 GPU cores, 48 GB memory</strong>. Those counts are hardware inventory, not measured utilization.</p>
+<div class="hardware-flow"><span>Shared graph<br><small>read-only during search</small></span><b>→</b><span>Serial precompute</span><b>→</b><span>Independent CPU attempts<br><small>atomic queue · per-attempt RNG</small></span><b>→</b><span>Ordered reduction</span></div>
+<details open><summary>What parallelism already exploits</summary><p>Independent attempts avoid shared mutation of their search state. The graph and precompute are shared read-only. Each attempt gets a deterministic RNG; results are reduced in index order. The calling thread participates, with no spawn for a one-worker run. Worker count is capped by the iteration count. Area starts are sequential to avoid nested worker pools.</p></details>
+<details><summary>Why core count does not establish speedup</summary><p>Serial work, thread launch costs, unequal attempt sizes, hash lookups, priority queues and memory traffic may limit scaling. These are hypotheses based on the implementation, not profiler findings. More workers can be slower on small requests. Different core types and shared power budgets also mean “15 cores” is not a 15× speedup prediction.</p></details>
+<details><summary>What a GPU experiment would need to establish</summary><p>The current pointer-heavy graph searches and per-attempt branching are not an existing Metal workload. Any GPU proposal needs an explicit kernel, suitable data layout and end-to-end measurements including dispatch/transfer overhead, plus unchanged validity and quality. No GPU acceleration or benefit is claimed here.</p></details>
+<p><a class="issue" href="https://github.com/SpeziMM/VeloGraph/issues/4">Deferred: CPU scaling, memory profiling & GPU feasibility · #4 ↗</a></p>
+</section>
+<section id="maintenance">
+<p class="eyebrow">08 / Keep it trustworthy</p><h2>Small modules. Traceable explanations.</h2>
+<div class="table-wrap"><table><thead><tr><th>Location</th><th>Responsibility</th></tr></thead><tbody><tr><td><code>include/ + src/</code></td><td>Graph, parser, start selection, precompute, waypoints, search and scoring. Value types and explicit ownership; no plugin framework.</td></tr><tr><td><code>src/main.cpp</code></td><td>CLI validation, request orchestration and JSON export.</td></tr><tr><td><code>tests/</code></td><td>Focused graph/CLI/report regression checks with small synthetic inputs.</td></tr><tr><td><code>tools/</code></td><td>Data preparation, visualization, benchmarks and report generation.</td></tr><tr><td><code>docs/report/</code></td><td>This offline report, small recorded fixtures, generated evidence and review fingerprint.</td></tr></tbody></table></div>
+<details open><summary>The update hook</summary><p>CI compares a source fingerprint against the reviewed manifest and regenerates the expected evidence in memory. Changed engine files, tests, CLI, report content or benchmark files make the check fail. Review affected explanations, preserve historical benchmark provenance, then refresh with a meaningful note. This detects changes; it cannot verify that prose is semantically correct.</p><pre>python3 tools/build_report.py --check
+# After reviewing the affected explanations and evidence:
+python3 tools/build_report.py --refresh --note "Explain the changed behavior and evidence"</pre></details>
+<p><a href="../AGENT_PLAYBOOK.md">Agent playbook</a> · <a href="../REPORT_REQUIREMENTS.md">Accepted scope</a> · <a href="README.md">Report maintenance guide</a> · <a href="../../tests/">Validation sources</a></p>
+<p class="small" id="review-note"></p>
+</section>
+<footer>VeloGraph · explanations tied to source, claims tied to evidence.</footer>
+</main></div>
+<noscript>This report needs JavaScript for interactive diagrams and generated evidence. Read <a href="../ALGORITHM.md">the text algorithm guide</a> instead.</noscript>
+</body></html>

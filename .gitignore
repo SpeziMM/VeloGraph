@@ -34,3 +34,8 @@ parse_benchmark*.cpp
 # Python tooling caches
 __pycache__/
 *.py[cod]
+
+# Versioned interactive report and its small evidence fixtures
+!docs/report/*.html
+!docs/report/*.json
+!docs/report/fixtures/*.json

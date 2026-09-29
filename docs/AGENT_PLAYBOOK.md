@@ -92,6 +92,9 @@ visualization agrees with output; remaining risks stated; diff reviewed.
 - `tools/eval_quality.py`: per-process evaluation and comparison.
 - `tools/route_map.py`: final route playback; `docs/ALGORITHM.md`: pipeline.
 - `docs/SKILL_REVIEW.md`: pinned skill provenance and limitations.
+- `docs/report/`: interactive report; update affected explanations and evidence on
+  source changes, then refresh the review manifest with a meaningful note.
+  `python3 tools/build_report.py --check` is a required CI gate.
 
 This draft captures the user's stated quality-first preference and was exercised
 on this repository. It is not a measured claim that playbooks themselves improve

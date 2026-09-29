@@ -16,7 +16,7 @@ find_path(OSMIUM_INCLUDE_DIR osmium/io/any_input.hpp HINTS /opt/homebrew/include
 find_path(PROTOZERO_INCLUDE_DIR protozero/pbf_reader.hpp HINTS /opt/homebrew/include /usr/local/include REQUIRED)
 
 add_library(velograph_core
-    src/Graph.cpp src/OSMParser.cpp src/RouteEvaluator.cpp
+    src/Graph.cpp src/OSMParser.cpp src/RouteEvaluator.cpp src/StartSelection.cpp
     src/RouteFinder.cpp src/RoutePrecompute.cpp src/WaypointGenerator.cpp)
 target_include_directories(velograph_core PUBLIC include)
 target_include_directories(velograph_core SYSTEM PUBLIC ${OSMIUM_INCLUDE_DIR} ${PROTOZERO_INCLUDE_DIR})
@@ -46,9 +46,16 @@ if(BUILD_TESTING)
     target_link_libraries(velograph_tests PRIVATE velograph_core)
     add_test(NAME core COMMAND velograph_tests)
     set_tests_properties(core PROPERTIES TIMEOUT 30)
+    add_executable(start_selection_tests tests/start_selection_tests.cpp)
+    target_link_libraries(start_selection_tests PRIVATE velograph_core)
+    add_test(NAME start_selection COMMAND start_selection_tests)
     find_package(Python3 COMPONENTS Interpreter)
     if(Python3_FOUND)
         add_test(NAME cli COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/cli_tests.py $<TARGET_FILE:VeloGraph>)
         set_tests_properties(cli PROPERTIES TIMEOUT 90)
+        add_test(NAME route_cli COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/route_cli_tests.py $<TARGET_FILE:VeloGraph>)
+        set_tests_properties(route_cli PROPERTIES TIMEOUT 90)
+        add_test(NAME report COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/report_tests.py)
+        add_test(NAME report_freshness COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tools/build_report.py --check)
     endif()
 endif()

@@ -25,7 +25,10 @@ python3 tools/route_map.py output/sample_path.json output/route_map.html
 ### CLI flags
 | Flag | Description | Default |
 |------|-------------|---------|
-| `--start_node <id>` | OSM node ID (required) | — |
+| `--start_node <id>` | OSM node ID, or use `--start LAT LON` | — |
+| `--max_snap <m>` | Maximum coordinate-to-node offset | 250 |
+| `--start_radius <m>` | Try eligible starts inside this radius around `--start` | off |
+| `--start_candidates <n>` | Nearest eligible area starts to try (1–64); iterations per start | 8 |
 | `--target_distance <m>` | Target loop distance in meters | 5000 |
 | `--profile <name>` | `scenic`, `safe-night`, `mountain-bike`, `casual` | scenic |
 | `--iterations <n>` | Number of search iterations | 10 |
@@ -37,6 +40,9 @@ python3 tools/route_map.py output/sample_path.json output/route_map.html
 | `--output_path <file>` | JSON output path | `output/sample_path.json` |
 
 The search is **parallel and deterministic**: a given `--seed` yields the same route regardless of `--threads` (each iteration uses an RNG seeded from `(seed, iteration_index)`).
+
+For input exploration and current limitations, open `docs/report/index.html`. Report
+maintenance is enforced by `python3 tools/build_report.py --check` (see AGENTS.md).
 
 ### Getting a start node ID
 Use `./build/inspect_graph <cache.bin> --sample N` for sampled well-connected nodes, `get_first_node`, or `findClosestNode()` in the Graph API with lat/lon coordinates.

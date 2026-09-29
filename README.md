@@ -57,6 +57,22 @@ use the canonical HTTPS endpoint, linked copyright attribution and normal browse
 caching; there is no bulk download or offline tile feature. Browsers or embedded
 viewers that strip referrers must not be used to load the OSM tile layer.
 
+## Interactive algorithm report
+
+Open [the engine notebook](docs/report/index.html) for the pipeline, algorithms/data
+structures, input command builder, recorded route points, failure scenarios and
+benchmark comparisons. It works offline. [Scope](docs/REPORT_REQUIREMENTS.md) and
+[maintenance instructions](docs/report/README.md) live alongside it. CI requires a
+reviewed report refresh when relevant code or evidence changes.
+
+Coordinate starts snap within 250 m by default (`--max_snap` changes the limit).
+To search nearby starts instead, use `--start LAT LON --start_radius 500
+--start_candidates 8`. The nearest eligible starts are tried in deterministic order;
+the limit is 1–64 and iterations apply **per start**. The chosen node is both start
+and finish. `run` reports `start_mode`, `start_offset_m`, `start_radius_m`,
+`distance_tolerance`, `eligible_starts` and `searched_starts`. An unsuccessful subset
+search does not rule out other starts in the area.
+
 ## Evidence and next changes
 
 - [Algorithm diagram and limitations](docs/ALGORITHM.md)
