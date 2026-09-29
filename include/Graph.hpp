@@ -4,41 +4,122 @@
 #include <vector>
 #include <unordered_map>
 #include <cmath>
+#include <iosfwd>
+#include <string>
+#include <cstdint>
+
+using NodeId = std::int64_t;
 
 // Using Adjacency List for O(1) traversal average case
 // and O(V + E) space complexity.
 class Graph {
 public:
+    // Highway classification for traffic estimation
+    enum class HighwayClass : unsigned char {
+        Motorway = 0,    // Highest traffic
+        Trunk = 1,
+        Primary = 2,
+        Secondary = 3,
+        Tertiary = 4,
+        Unclassified = 5,
+        Residential = 6,
+        LivingStreet = 7,
+        Service = 8,
+        Track = 9,
+        Path = 10,
+        Cycleway = 11,   // Lowest traffic (dedicated)
+        Unknown = 12
+    };
+
+    // Surface quality for comfort scoring
+    enum class SurfaceQuality : unsigned char {
+        Excellent = 0,   // Smooth asphalt
+        Good = 1,        // Concrete, paving stones
+        Intermediate = 2,// Older asphalt
+        Bad = 3,         // Gravel, compacted
+        VeryBad = 4,     // Unpaved, dirt
+        Unknown = 5
+    };
+
     struct Node {
-        long id;
+        NodeId id;
         double lat;
         double lon;
         // Optimization: Use bit-packing for flags (traffic, surface type)
-        unsigned char flags; 
+        unsigned char flags;
+        float elevation = 0.0f;     // Meters; runtime overlay from loadElevation (not serialized)
     };
 
     struct Edge {
-        long to_node_id;
-        double weight; // Distance or cost
+        NodeId to_node_id;
+        double weight;              // Distance in meters
+        HighwayClass highway_class; // Road type for traffic estimation
+        SurfaceQuality surface;     // Surface quality
+        bool is_lit;                // Street lighting
+        bool is_oneway;             // One-way restriction
+        float grade = 0.0f;         // Signed slope = (elev_to - elev_from)/weight; set by loadElevation
+    };
+
+    struct EdgeInput {
+        NodeId from_id;
+        NodeId to_id;
+        HighwayClass highway_class;
+        SurfaceQuality surface;
+        bool is_lit;
+        bool is_oneway;
     };
 
 private:
-    std::unordered_map<long, Node> nodes;
-    std::unordered_map<long, std::vector<Edge>> adjacency_list;
+    std::unordered_map<NodeId, Node> nodes;
+    std::unordered_map<NodeId, std::vector<Edge>> adjacency_list;
+    std::unordered_map<NodeId, std::vector<std::pair<NodeId, Edge>>> incoming_adjacency_list; // to_id -> list of (from_id, edge)
     
+    // Spatial Index (K-D Tree)
+    std::vector<NodeId> spatial_index; // Stores node IDs
+    bool index_built = false;
+
+    void buildKDTree(size_t start, size_t end, int depth);
+    void findNearestNeighbor(size_t start, size_t end, int depth, double lat, double lon, NodeId& best_node, double& min_dist) const;
+    void findNodesInRange(size_t start, size_t end, int depth, double lat, double lon, double radius_meters, std::vector<NodeId>& results) const;
+
     // Calculate Haversine distance between two nodes (in meters)
     double calculateDistance(const Node& from, const Node& to) const;
+    double calculateDistance(double lat1, double lon1, double lat2, double lon2) const;
 
 public:
     void addNode(const Node& n);
-    void addEdge(long from_id, long to_id);
+    void addEdge(NodeId from_id, NodeId to_id, HighwayClass hw_class = HighwayClass::Unknown,
+                 SurfaceQuality surface = SurfaceQuality::Unknown, 
+                 bool is_lit = false, bool is_oneway = false);
+    void buildFrom(const std::unordered_map<NodeId, Node>& source_nodes,
+                   const std::vector<EdgeInput>& edges);
+    
+    // Spatial queries
+    void buildSpatialIndex();
+    const Node* findClosestNode(double lat, double lon) const;
+    std::vector<NodeId> findNodesInRadius(double lat, double lon, double radius_meters) const;
     
     // Getters
-    const std::unordered_map<long, Node>& getNodes() const { return nodes; }
-    const std::unordered_map<long, std::vector<Edge>>& getAdjacencyList() const { return adjacency_list; }
-    const Node* getNode(long id) const;
-    const std::vector<Edge>* getEdges(long node_id) const;
+    const std::unordered_map<NodeId, std::vector<Edge>>& getAdjacencyList() const { return adjacency_list; }
+    const Node* getNode(NodeId id) const;
+    const std::vector<Edge>* getEdges(NodeId node_id) const;
     
+    // Get all nodes that have edges TO this node (for reverse traversal)
+    // Borrowed view, valid until the graph is mutated. Edge retains its forward destination.
+    const std::vector<std::pair<NodeId, Edge>>& getIncomingEdges(NodeId node_id) const;
+    
+    // Simplify graph by merging degree-2 nodes with compatible edges
+    void simplifyGraph();
+
+    bool serialize(std::ostream& out) const;
+    bool deserialize(std::istream& in);
+    void rebuildIncomingFromAdjacency();
+
+    // Load per-node elevation from a sidecar produced by tools/build_elevation.py and
+    // compute each edge's signed grade. Runtime overlay — not part of the graph cache.
+    // Returns the number of nodes matched, or -1 on read error.
+    std::int64_t loadElevation(const std::string& path);
+
     size_t nodeCount() const { return nodes.size(); }
     size_t edgeCount() const;
 };

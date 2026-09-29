@@ -1,39 +1,54 @@
-cmake_minimum_required(VERSION 3.10)
-project(VeloGraph)
+cmake_minimum_required(VERSION 3.18)
+project(VeloGraph LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 17)
-set(CMAKE_CXX_STANDARD_REQUIRED True)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+set(CMAKE_CXX_EXTENSIONS OFF)
+option(BUILD_TOOLS "Build standalone graph tools" ON)
+option(VELOGRAPH_NATIVE "Optimize for the build machine (non-portable binaries)" OFF)
+option(VELOGRAPH_SANITIZERS "Enable address and undefined behavior sanitizers" OFF)
 
-# Include directories
-include_directories(include)
-
-# macOS Homebrew paths
-if(APPLE)
-    include_directories(/opt/homebrew/include)
-    include_directories(/usr/local/include)
-    link_directories(/opt/homebrew/lib)
-    link_directories(/usr/local/lib)
-endif()
-
-# Find required packages
 find_package(Threads REQUIRED)
 find_package(ZLIB REQUIRED)
 find_package(BZip2 REQUIRED)
 find_package(EXPAT REQUIRED)
+find_path(OSMIUM_INCLUDE_DIR osmium/io/any_input.hpp HINTS /opt/homebrew/include /usr/local/include REQUIRED)
+find_path(PROTOZERO_INCLUDE_DIR protozero/pbf_reader.hpp HINTS /opt/homebrew/include /usr/local/include REQUIRED)
 
-# Source files
-file(GLOB SOURCES "src/*.cpp")
+add_library(velograph_core
+    src/Graph.cpp src/OSMParser.cpp src/RouteEvaluator.cpp
+    src/RouteFinder.cpp src/RoutePrecompute.cpp src/WaypointGenerator.cpp)
+target_include_directories(velograph_core PUBLIC include)
+target_include_directories(velograph_core SYSTEM PUBLIC ${OSMIUM_INCLUDE_DIR} ${PROTOZERO_INCLUDE_DIR})
+target_link_libraries(velograph_core PUBLIC Threads::Threads ZLIB::ZLIB BZip2::BZip2 EXPAT::EXPAT)
+if(CMAKE_CXX_COMPILER_ID MATCHES "Clang|GNU")
+    target_compile_options(velograph_core PUBLIC -Wall -Wextra -Wpedantic)
+    if(VELOGRAPH_NATIVE)
+        target_compile_options(velograph_core PUBLIC -march=native)
+    endif()
+    if(VELOGRAPH_SANITIZERS)
+        target_compile_options(velograph_core PUBLIC -fsanitize=address,undefined -fno-omit-frame-pointer)
+        target_link_options(velograph_core PUBLIC -fsanitize=address,undefined)
+    endif()
+endif()
 
-# Executable
-add_executable(VeloGraph ${SOURCES})
-
-# Link libraries for OSM PBF parsing
-target_link_libraries(VeloGraph 
-    Threads::Threads
-    ${ZLIB_LIBRARIES}
-    ${BZIP2_LIBRARIES}
-    ${EXPAT_LIBRARIES}
-)
-
-# Compiler flags for optimization
-target_compile_options(VeloGraph PRIVATE -O3 -march=native)
+add_executable(VeloGraph src/main.cpp)
+target_link_libraries(VeloGraph PRIVATE velograph_core)
+if(BUILD_TOOLS)
+    foreach(tool parse_only parse_build_only inspect_graph get_first_node route_benchmark)
+        add_executable(${tool} tools/${tool}.cpp)
+        target_link_libraries(${tool} PRIVATE velograph_core)
+    endforeach()
+endif()
+include(CTest)
+if(BUILD_TESTING)
+    add_executable(velograph_tests tests/core_tests.cpp)
+    target_link_libraries(velograph_tests PRIVATE velograph_core)
+    add_test(NAME core COMMAND velograph_tests)
+    set_tests_properties(core PROPERTIES TIMEOUT 30)
+    find_package(Python3 COMPONENTS Interpreter)
+    if(Python3_FOUND)
+        add_test(NAME cli COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/cli_tests.py $<TARGET_FILE:VeloGraph>)
+        set_tests_properties(cli PROPERTIES TIMEOUT 90)
+    endif()
+endif()
