@@ -10,6 +10,7 @@
 #include <stdexcept>
 #include <string_view>
 #include "../include/Graph.hpp"
+#include "../include/StartSelection.hpp"
 #include "../include/OSMParser.hpp"
 #include "../include/RouteEvaluator.hpp"
 #include "../include/RouteFinder.hpp"
@@ -21,6 +22,12 @@ struct RunMeta {
     int iterations = 0;
     unsigned int seed = 0;
     bool success = false;
+    std::string start_mode = "node";
+    double start_offset_m = 0;
+    double start_radius_m = 0;
+    double tolerance = .1;
+    std::size_t eligible_starts = 0;
+    std::size_t searched_starts = 0;
     double wall_time_ms = 0.0;
     std::string engine = "hybrid";
     bool within_tolerance = false;
@@ -40,6 +47,12 @@ void exportPathToJSON(const Graph& graph, const std::vector<NodeId>& path_ids,
 
     out << "  \"run\": {\n";
     out << "    \"engine\": \"" << meta.engine << "\",\n";
+    out << "    \"start_mode\": \"" << meta.start_mode << "\",\n";
+    out << "    \"start_offset_m\": " << meta.start_offset_m << ",\n";
+    out << "    \"start_radius_m\": " << meta.start_radius_m << ",\n";
+    out << "    \"distance_tolerance\": " << meta.tolerance << ",\n";
+    out << "    \"eligible_starts\": " << meta.eligible_starts << ",\n";
+    out << "    \"searched_starts\": " << meta.searched_starts << ",\n";
     out << "    \"within_tolerance\": " << (meta.within_tolerance ? "true" : "false") << ",\n";
     out << "    \"start_node\": " << meta.start_node << ",\n";
     out << "    \"target_distance_m\": " << meta.target_distance << ",\n";
@@ -87,6 +100,9 @@ void printUsage(const char* prog_name) {
     std::cerr << "Usage: " << prog_name << " <osm_file.pbf> [options]\n"
         "  --start_node <id>         OSM start node (or use --start)\n"
         "  --start <lat> <lon>       Snap coordinates to nearest node\n"
+        "  --max_snap <meters>      Maximum coordinate snapping distance (250)\n"
+        "  --start_radius <meters>  Search starts in this radius around --start\n"
+        "  --start_candidates <n>   Nearest eligible starts to try, 1..64 (8)\n"
         "  --distance <meters>      Target distance; --target_distance is an alias (5000)\n"
         "  --profile <name>         scenic, safe-night, mountain-bike, casual\n"
         "  --iterations <n>         Positive iteration count (10)\n"
@@ -132,6 +148,10 @@ int main(int argc, char* argv[]) try {
     NodeId start_node_id = -1;
     double start_lat = 0.0, start_lon = 0.0;
     bool use_lat_lon = false;
+    bool node_requested = false;
+    double start_radius = 0.0, max_snap = 250.0;
+    unsigned start_candidates = 8;
+    bool area_requested = false, snap_requested = false, candidates_requested = false;
     double target_distance = 5000.0;
     std::string profile_name = "scenic";
     std::string output_path = "output/sample_path.json";
@@ -151,7 +171,10 @@ int main(int argc, char* argv[]) try {
             if (i + 1 >= argc) throw std::invalid_argument("Missing value for " + arg);
             return argv[++i];
         };
-        if (arg == "--start_node") start_node_id = parseInteger<NodeId>(next());
+        if (arg == "--start_node") { start_node_id = parseInteger<NodeId>(next()); node_requested = true; }
+        else if (arg == "--max_snap") { max_snap = parseNumber(next()); snap_requested = true; }
+        else if (arg == "--start_radius") { start_radius = parseNumber(next()); area_requested = true; }
+        else if (arg == "--start_candidates") { start_candidates = parseInteger<unsigned>(next()); candidates_requested = true; }
         else if (arg == "--start") {
             start_lat = parseNumber(next()); start_lon = parseNumber(next()); use_lat_lon = true;
         } else if (arg == "--distance" || arg == "--target_distance") target_distance = parseNumber(next());
@@ -171,6 +194,11 @@ int main(int argc, char* argv[]) try {
         } else if (arg == "--no_simplify") simplify = false;
         else throw std::invalid_argument("Unknown option: " + arg);
     }
+    if ((area_requested && (!use_lat_lon || start_radius <= 0)) ||
+        max_snap <= 0 || (snap_requested && (!use_lat_lon || area_requested)) ||
+        (candidates_requested && !area_requested) || start_candidates == 0 || start_candidates > 64 ||
+        (use_lat_lon && node_requested))
+        throw std::invalid_argument("Use one start mode; positive radius/snap and 1..64 candidates required");
     if (target_distance <= 0 || iterations <= 0 || tolerance < 0 || tolerance > 1)
         throw std::invalid_argument("Distance and iterations must be positive; tolerance must be in [0,1]");
     if (std::abs(start_lat) > 90 || std::abs(start_lon) > 180)
@@ -216,17 +244,16 @@ int main(int argc, char* argv[]) try {
         }
     }
 
-    // Resolve lat/lon to node if needed
+    StartSelection::Selection starts;
     if (use_lat_lon) {
-        const auto* closest = graph.findClosestNode(start_lat, start_lon);
-        if (closest) {
-            start_node_id = closest->id;
-            std::cout << "[VeloGraph] Resolved (" << start_lat << ", " << start_lon
-                      << ") to node " << start_node_id << std::endl;
-        } else {
-            std::cerr << "[VeloGraph] No node found near given coordinates!" << std::endl;
-            return 1;
-        }
+        starts = area_requested
+            ? StartSelection::inArea(graph, start_lat, start_lon, start_radius, start_candidates)
+            : StartSelection::nearest(graph, start_lat, start_lon, max_snap);
+        if (starts.candidates.empty())
+            throw std::invalid_argument("No eligible start within the requested area or snapping distance");
+    } else {
+        if (!graph.getNode(start_node_id)) throw std::invalid_argument("Start node does not exist");
+        starts = {{{start_node_id, 0.0}}, 1};
     }
 
     // Get user profile
@@ -241,53 +268,63 @@ int main(int argc, char* argv[]) try {
 
     std::cout << "\n[VeloGraph] Profile: " << profile.name << std::endl;
 
-    const Graph::Node* start_node = graph.getNode(start_node_id);
-    
-    if (start_node) {
-        std::cout << "[VeloGraph] Found start node: " << start_node->id 
-                  << " at " << start_node->lat << ", " << start_node->lon << std::endl;
-        
-        // Find optimal cycle route
-        RouteFinder finder(graph, evaluator, seed);
-        finder.setThreads(threads);
-        finder.setGreedyOnly(engine == "greedy");
-        auto t0 = std::chrono::steady_clock::now();
-        auto result = finder.findOptimalCycle(start_node->id, target_distance, tolerance, profile, iterations);
-        auto t1 = std::chrono::steady_clock::now();
-
-        RunMeta meta;
-        meta.start_node = start_node->id;
-        meta.target_distance = target_distance;
-        meta.iterations = iterations;
-        meta.seed = finder.seed();
-        meta.engine = engine;
-        meta.within_tolerance = !result.path.empty() && result.distance_error <= target_distance * tolerance;
-        meta.success = !result.path.empty();
-        meta.wall_time_ms = std::chrono::duration<double, std::milli>(t1 - t0).count();
-        // distance_error stays DBL_MAX when nothing was found; report 0 on failure.
-        meta.distance_error = meta.success ? result.distance_error : 0.0;
-
-        if (meta.success) {
-            std::cout << "\n[VeloGraph] Route found!" << std::endl;
-            std::cout << "  - Distance: " << result.total_distance << "m" << std::endl;
-            std::cout << "  - Fitness: " << result.fitness_score << std::endl;
-            std::cout << "  - Total ascent: " << result.detailed_score.total_ascent_m << "m" << std::endl;
-            std::cout << "  - Wall time: " << meta.wall_time_ms << "ms" << std::endl;
-
-            exportPathToJSON(graph, result.path, output_path, meta, &result.detailed_score);
-            std::cout << "\n[VeloGraph] Route exported to " << output_path << std::endl;
-            std::cout << "[VeloGraph] Use 'python3 tools/route_map.py " << output_path << "' to visualize" << std::endl;
-        } else {
-            std::cerr << "[VeloGraph] Could not find a valid cycle route!" << std::endl;
-            // Still emit JSON (empty path, success=false) so the eval harness can record the failure.
-            exportPathToJSON(graph, result.path, output_path, meta, nullptr);
-            return 2;
+    RouteFinder finder(graph, evaluator, seed);
+    finder.setThreads(threads);
+    finder.setGreedyOnly(engine == "greedy");
+    RouteFinder::RouteResult result{};
+    auto selected_start = starts.candidates.front();
+    const auto t0 = std::chrono::steady_clock::now();
+    auto combined = [target_distance](const RouteFinder::RouteResult& route) {
+        return .6 * route.fitness_score + .4 * (1.0 - std::min(1.0, route.distance_error / target_distance));
+    };
+    for (const auto& candidate : starts.candidates) {
+        auto route = finder.findOptimalCycle(candidate.id, target_distance, tolerance, profile, iterations);
+        if (route.path.empty()) continue;
+        const bool in_band = route.distance_error <= target_distance * tolerance;
+        const bool best_in_band = !result.path.empty() && result.distance_error <= target_distance * tolerance;
+        if (result.path.empty() || (in_band && !best_in_band) ||
+            (in_band == best_in_band && combined(route) > combined(result))) {
+            result = std::move(route);
+            selected_start = candidate;
         }
-    } else {
-        std::cerr << "[VeloGraph] Could not find start node with ID: " << start_node_id << std::endl;
-        return 1;
     }
-    
+    const auto t1 = std::chrono::steady_clock::now();
+
+    RunMeta meta;
+    meta.start_node = selected_start.id;
+    meta.start_mode = area_requested ? "area" : (use_lat_lon ? "point" : "node");
+    meta.start_offset_m = selected_start.offset_m;
+    meta.start_radius_m = start_radius;
+    meta.tolerance = tolerance;
+    meta.eligible_starts = starts.eligible_count;
+    meta.searched_starts = starts.candidates.size();
+    meta.target_distance = target_distance;
+    meta.iterations = iterations;
+    meta.seed = finder.seed();
+    meta.engine = engine;
+    meta.within_tolerance = !result.path.empty() && result.distance_error <= target_distance * tolerance;
+    meta.success = !result.path.empty();
+    meta.wall_time_ms = std::chrono::duration<double, std::milli>(t1 - t0).count();
+    // distance_error stays DBL_MAX when nothing was found; report 0 on failure.
+    meta.distance_error = meta.success ? result.distance_error : 0.0;
+
+    if (meta.success) {
+        std::cout << "\n[VeloGraph] Route found!" << std::endl;
+        std::cout << "  - Distance: " << result.total_distance << "m" << std::endl;
+        std::cout << "  - Fitness: " << result.fitness_score << std::endl;
+        std::cout << "  - Total ascent: " << result.detailed_score.total_ascent_m << "m" << std::endl;
+        std::cout << "  - Wall time: " << meta.wall_time_ms << "ms" << std::endl;
+
+        exportPathToJSON(graph, result.path, output_path, meta, &result.detailed_score);
+        std::cout << "\n[VeloGraph] Route exported to " << output_path << std::endl;
+        std::cout << "[VeloGraph] Use 'python3 tools/route_map.py " << output_path << "' to visualize" << std::endl;
+    } else {
+        std::cerr << "[VeloGraph] Search found no valid cycle; this does not prove none exists." << std::endl;
+        // Still emit JSON (empty path, success=false) so the eval harness can record the failure.
+        exportPathToJSON(graph, result.path, output_path, meta, nullptr);
+        return 2;
+    }
+
     std::cout << "\n[VeloGraph] Engine Finished." << std::endl;
     return 0;
 }

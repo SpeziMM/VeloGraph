@@ -1,5 +1,11 @@
 # How VeloGraph builds a cycling loop
 
+The [interactive report](report/index.html) expands every stage with source links,
+examples and evidence. A coordinate start now has a maximum snapping distance
+(default 250 m). Area mode tries a bounded nearest-first set of eligible starts;
+the selected node is both start and finish. Area candidates run sequentially, each
+with the full per-start iteration budget and the same selection rule.
+
 Given a start and target length, the hybrid engine tries several waypoint loops and
 keeps the best valid candidate. Independent iterations run on worker threads.
 
@@ -47,3 +53,6 @@ geometry; the map connects the retained nodes.
 - Traffic and scenery are proxies based on road classification, not measured traffic
   or landscape data. Existing profiles are heuristic scores, not safety guarantees.
 - Tests and benchmark selection must include failure cases and unseen starts.
+
+CPU/memory profiling is deferred in [issue #4](https://github.com/SpeziMM/VeloGraph/issues/4);
+reliable infeasibility proofs are deferred in [issue #5](https://github.com/SpeziMM/VeloGraph/issues/5).

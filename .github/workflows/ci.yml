@@ -13,4 +13,5 @@ jobs:
       - run: sudo apt-get update && sudo apt-get install -y libosmium2-dev libprotozero-dev libbz2-dev libexpat1-dev zlib1g-dev
       - run: cmake -S . -B build -DCMAKE_BUILD_TYPE=${{ matrix.build_type }} -DVELOGRAPH_SANITIZERS=${{ matrix.build_type == 'Debug' && 'ON' || 'OFF' }}
       - run: cmake --build build --parallel 2
+      - run: python3 tools/build_report.py --check
       - run: ctest --test-dir build --output-on-failure

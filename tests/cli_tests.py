@@ -11,6 +11,11 @@ for arguments in [
     ['--weight_gradient', '1.1'], ['--weight_turns', '-.2'],
     ['--distance'], ['--engine', 'unknown'], ['--profile', 'unknown'],
     ['--start', '91', '8'], ['--unknown'],
+    ['--start_radius', '100'], ['--start', '49', '8', '--start_radius', '-1'],
+    ['--start', '49', '8', '--max_snap', '0'], ['--start_candidates', '65'],
+    ['--start', '49', '8', '--start_node', '1'],
+    ['--start', '49', '8', '--start_node', '-1'],
+    ['--start', '49', '8', '--start_radius', '100', '--max_snap', '10'],
 ]:
     p = subprocess.run([binary, 'nonexistent.pbf', *arguments], capture_output=True, text=True, timeout=5)
     assert p.returncode == 1, (arguments, p.returncode, p.stderr)
