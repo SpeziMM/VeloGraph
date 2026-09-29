@@ -15,12 +15,16 @@ import argparse
 import json
 import os
 import webbrowser
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
 from collections import Counter
 
 HTML = """<!DOCTYPE html>
 <html>
 <head>
 <meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1"/>
+<meta name="referrer" content="origin"/>
 <title>VeloGraph route</title>
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/leaflet.css"/>
 <script src="https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/leaflet.js"></script>
@@ -35,7 +39,7 @@ HTML = """<!DOCTYPE html>
   .panel h3 {{ margin:0 0 8px; font-size:15px; font-weight:600; }}
   .panel .row {{ display:flex; justify-content:space-between; }}
   .panel .row span:last-child {{ font-weight:600; }}
-  .legend {{ position:absolute; bottom:18px; left:12px; z-index:1000; background:#fff;
+  .legend {{ position:absolute; bottom:40px; left:12px; z-index:1000; background:#fff;
             border:1px solid #ccc; border-radius:8px; padding:10px 12px; font-size:12px; }}
   .bar {{ height:10px; width:160px; border-radius:5px;
          background:linear-gradient(90deg,#1d9e75,#ef9f27,#e24b4a); margin:4px 0; }}
@@ -48,6 +52,7 @@ HTML = """<!DOCTYPE html>
   <h3>VeloGraph · final loop</h3>
   <p>Nearby graph → ellipse waypoints → segment search → refinement → best valid loop.</p>
   <p><strong>{target_status}</strong></p>
+  <p id="tile-notice" hidden>Street tiles are disabled for file views. Open this map through the route-map Python tool’s local HTTP viewer.</p>
   <div class="row"><span>Distance</span><span>{dist_km} km</span></div>
   <div class="row"><span>Fitness</span><span>{fitness}</span></div>
   <div class="row"><span>Scenery</span><span>{scenery}</span></div>
@@ -71,9 +76,14 @@ HTML = """<!DOCTYPE html>
   var coords = {coords};
   var revisited = {revisited};
   var map = L.map('map');
-  L.tileLayer('https://{{s}}.tile.openstreetmap.org/{{z}}/{{x}}/{{y}}.png', {{
-    maxZoom: 19, attribution: '&copy; OpenStreetMap contributors'
-  }}).addTo(map);
+  map.attributionControl.addAttribution('&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap contributors</a>');
+  if (location.protocol === 'http:' || location.protocol === 'https:') {{
+    L.tileLayer('https://tile.openstreetmap.org/{{z}}/{{x}}/{{y}}.png', {{
+      maxZoom: 19, referrerPolicy: 'origin', updateWhenIdle: true, keepBuffer: 0
+    }}).addTo(map);
+  }} else {{
+    document.getElementById('tile-notice').hidden = false;
+  }}
 
   function lerp(a,b,t){{ return a+(b-a)*t; }}
   function colorAt(t){{
@@ -126,11 +136,40 @@ HTML = """<!DOCTYPE html>
 """
 
 
+def serve_map(path, port=0, open_browser=True):
+    """Serve only this generated map on loopback, never the surrounding output files."""
+    content = Path(path).read_bytes()
+
+    class MapHandler(BaseHTTPRequestHandler):
+        def do_GET(self):
+            if self.path not in ('/', '/route.html'):
+                self.send_error(404)
+                return
+            self.send_response(200)
+            self.send_header('Content-Type', 'text/html; charset=utf-8')
+            self.send_header('Content-Length', str(len(content)))
+            self.send_header('Referrer-Policy', 'origin')
+            self.end_headers()
+            self.wfile.write(content)
+
+    with ThreadingHTTPServer(('127.0.0.1', port), MapHandler) as server:
+        url = f'http://127.0.0.1:{server.server_port}/route.html'
+        print(f'Map viewer: {url} (Ctrl+C to stop)', flush=True)
+        if open_browser:
+            webbrowser.open(url)
+        try:
+            server.serve_forever()
+        except KeyboardInterrupt:
+            pass
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('input', nargs='?', default='output/demo_route.json')
     parser.add_argument('output', nargs='?', default='output/route_map.html')
-    parser.add_argument('--no-open', action='store_true')
+    parser.add_argument('--no-open', action='store_true', help='Generate only; with --serve, do not launch a browser')
+    parser.add_argument('--serve', action='store_true', help='Serve the map even with --no-open')
+    parser.add_argument('--port', type=int, default=0, help='Local HTTP port (default: choose an available port)')
     args = parser.parse_args()
     in_file, out_file = args.input, args.output
     with open(in_file) as source:
@@ -173,8 +212,8 @@ def main():
         f.write(html)
     abs_path = os.path.abspath(out_file)
     print(f"Map written to {abs_path}")
-    if not args.no_open:
-        webbrowser.open(f"file://{abs_path}")
+    if args.serve or not args.no_open:
+        serve_map(abs_path, args.port, open_browser=not args.no_open)
 
 
 if __name__ == "__main__":

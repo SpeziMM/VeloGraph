@@ -49,6 +49,14 @@ JSON includes the actual seed, engine, measured search time, score breakdown and
 no route exits with code 2, input/runtime errors with code 1. Playback follows the
 final route, while the panel briefly explains the search pipeline.
 
+The map tool serves the generated page on loopback HTTP until Ctrl+C so browsers
+can send the referrer required by the [OSM tile policy](https://operations.osmfoundation.org/policies/tiles/).
+Direct `file://` views show route geometry but disable street tiles. `--no-open`
+generates HTML only; add `--serve` to serve without launching a browser. Tiles
+use the canonical HTTPS endpoint, linked copyright attribution and normal browser
+caching; there is no bulk download or offline tile feature. Browsers or embedded
+viewers that strip referrers must not be used to load the OSM tile layer.
+
 ## Evidence and next changes
 
 - [Algorithm diagram and limitations](docs/ALGORITHM.md)
